@@ -53,6 +53,28 @@ local telem_aft = {
 local cmd_enabled = false
 local last_cmd_ms = 0
 
+local K_HELIRSC = 31
+
+local function pack_erpm_le(erpm)
+    local b0 = erpm % 256
+    local b1 = math.floor(erpm / 256) % 256
+    local b2 = math.floor(erpm / 65536) % 256
+    local b3 = math.floor(erpm / 16777216) % 256
+    return b0, b1, b2, b3
+end
+
+local function send_erpm_command(can_id, erpm)
+    local msg = CANFrame()
+    msg:id(can_id)
+    local b0, b1, b2, b3 = pack_erpm_le(erpm)
+    msg:data(0, b0)
+    msg:data(1, b1)
+    msg:data(2, b2)
+    msg:data(3, b3)
+    msg:dlc(4)
+    can_driver:write_frame(msg, 10000)
+end
+
 mm_dti_command_rpm_fwd = 0
 mm_dti_command_rpm_aft = 0
 mm_dti_actual_rpm_fwd = 0
@@ -70,6 +92,28 @@ function update()
     local frame = can_driver:read_frame()
     while frame do
         frame = can_driver:read_frame()
+    end
+
+    if arming:is_armed() then
+        local rsc_output = SRV_Channels:get_output_scaled(K_HELIRSC)
+        if rsc_output then
+            local erpm = math.floor((rsc_output / 1000.0) * common.ERPM_HOVER + 0.5)
+            if erpm < 0 then
+                erpm = 0
+            end
+
+            send_erpm_command(CMD_ID_FWD, erpm)
+            send_erpm_command(CMD_ID_AFT, erpm)
+
+            local rotor_rpm = common.rpm_from_erpm(erpm)
+            mm_dti_command_rpm_fwd = rotor_rpm
+            mm_dti_command_rpm_aft = rotor_rpm
+
+            last_cmd_ms = millis():toint()
+        end
+    else
+        mm_dti_command_rpm_fwd = 0
+        mm_dti_command_rpm_aft = 0
     end
 
     return update, common.DTI_COMMAND_RATE_MS
