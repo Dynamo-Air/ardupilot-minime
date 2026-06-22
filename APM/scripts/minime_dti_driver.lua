@@ -22,6 +22,13 @@ local CAN_FLAG_EFF = uint32_t(1) << 31
 local CMD_ID_FWD = CAN_FLAG_EFF | uint32_t((0x03 << 8) | common.DTI_FWD_NODE)
 local CMD_ID_AFT = CAN_FLAG_EFF | uint32_t((0x03 << 8) | common.DTI_AFT_NODE)
 
+local ESC_IDX_FWD = 0
+local ESC_IDX_AFT = 1
+local ESC_DATA_MASK = 0x0D
+
+local esc_telem_fwd = ESCTelemetryData()
+local esc_telem_aft = ESCTelemetryData()
+
 local function parse_i16_le(b0, b1)
     local val = b0 + b1 * 256
     if val >= 32768 then
@@ -193,6 +200,22 @@ local function send_erpm_command(can_id, erpm)
     can_driver:write_frame(msg, 10000)
 end
 
+local function update_esc_telemetry()
+    esc_telem_fwd:voltage(telem_fwd.voltage)
+    esc_telem_fwd:current(telem_fwd.current_dc)
+    esc_telem_fwd:temperature_cdeg(math.floor(telem_fwd.temp_motor * 100))
+    local rpm_fwd = common.rpm_from_erpm(telem_fwd.erpm)
+    esc_telem:update_rpm(ESC_IDX_FWD, rpm_fwd, 0)
+    esc_telem:update_telem_data(ESC_IDX_FWD, esc_telem_fwd, ESC_DATA_MASK)
+
+    esc_telem_aft:voltage(telem_aft.voltage)
+    esc_telem_aft:current(telem_aft.current_dc)
+    esc_telem_aft:temperature_cdeg(math.floor(telem_aft.temp_motor * 100))
+    local rpm_aft = common.rpm_from_erpm(telem_aft.erpm)
+    esc_telem:update_rpm(ESC_IDX_AFT, rpm_aft, 0)
+    esc_telem:update_telem_data(ESC_IDX_AFT, esc_telem_aft, ESC_DATA_MASK)
+end
+
 mm_dti_command_rpm_fwd = 0
 mm_dti_command_rpm_aft = 0
 mm_dti_actual_rpm_fwd = 0
@@ -243,6 +266,8 @@ function update()
     mm_dti_temp_sensor_fault_fwd = telem_fwd.temp_sensor_fault
     mm_dti_temp_sensor_fault_aft = telem_aft.temp_sensor_fault
     mm_dti_fault_active = (telem_fwd.fault_code ~= 0) or (telem_aft.fault_code ~= 0)
+
+    update_esc_telemetry()
 
     if arming:is_armed() then
         local rsc_output = SRV_Channels:get_output_scaled(K_HELIRSC)
