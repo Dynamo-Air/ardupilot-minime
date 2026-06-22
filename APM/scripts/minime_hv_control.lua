@@ -54,6 +54,10 @@ local PRECHARGE_FALLBACK_TIME_MS = 3000
 local EXPECTED_VOLTAGE = 133.2
 local CONTACTOR_SETTLE_MS = 50
 
+local settling_started = false
+local settling_start_ms = 0
+local settling_reason = ""
+
 local prev_armed = false
 
 local STATE_NAMES = {
@@ -84,6 +88,16 @@ end
 local function set_energized_state()
     gpio:write(common.GPIO_FWD_MAIN, GPIO_HIGH)
     gpio:write(common.GPIO_AFT_MAIN, GPIO_HIGH)
+    gpio:write(common.GPIO_FWD_PRECHARGE, GPIO_LOW)
+    gpio:write(common.GPIO_AFT_PRECHARGE, GPIO_LOW)
+end
+
+local function close_main_ssrs()
+    gpio:write(common.GPIO_FWD_MAIN, GPIO_HIGH)
+    gpio:write(common.GPIO_AFT_MAIN, GPIO_HIGH)
+end
+
+local function open_precharge_ssrs()
     gpio:write(common.GPIO_FWD_PRECHARGE, GPIO_LOW)
     gpio:write(common.GPIO_AFT_PRECHARGE, GPIO_LOW)
 end
@@ -221,13 +235,17 @@ local function handle_de_energized()
         if can_energize() then
             precharge_start_ms = millis():toint()
             precharge_telem_seen = false
+            settling_started = false
+            settling_reason = ""
             transition_state(common.STATE_PRECHARGING, "ENERGIZE_CMD")
         end
     end
 end
 
 local function handle_precharging()
-    set_precharge_state()
+    if not settling_started then
+        set_precharge_state()
+    end
     mm_hv_command_enable = false
 
     local now_ms = millis():toint()
@@ -235,14 +253,29 @@ local function handle_precharging()
 
     local has_fault, fault_reason = check_dti_fault_precharge()
     if has_fault then
+        settling_started = false
         emergency_shutdown(fault_reason)
         return
     end
 
     if mm_hv_cmd_deenergize then
         mm_hv_cmd_deenergize = false
+        settling_started = false
         set_safe_state()
         transition_state(common.STATE_DE_ENERGIZED, "DEENERGIZE_CMD")
+        return
+    end
+
+    if settling_started then
+        local settling_elapsed = now_ms - settling_start_ms
+        if settling_elapsed >= CONTACTOR_SETTLE_MS then
+            open_precharge_ssrs()
+            local voltage = math.min(mm_dti_voltage_fwd or 0, mm_dti_voltage_aft or 0)
+            gcs:send_text(common.MAV_SEVERITY.INFO,
+                string.format("HV: Precharge complete %.0fV %dms", voltage, elapsed_ms))
+            settling_started = false
+            transition_state(common.STATE_ENERGIZED, settling_reason)
+        end
         return
     end
 
@@ -289,8 +322,10 @@ local function handle_precharging()
     end
 
     if complete then
-        set_energized_state()
-        transition_state(common.STATE_ENERGIZED, reason)
+        close_main_ssrs()
+        settling_started = true
+        settling_start_ms = now_ms
+        settling_reason = reason
     end
 end
 
