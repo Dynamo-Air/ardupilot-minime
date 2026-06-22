@@ -26,8 +26,6 @@ local state_entry_ms = 0
 
 local hvil_adc = nil
 local hvil_initialized = false
-local state_machine_counter = 0
-local STATE_MACHINE_DIVISOR = 5
 
 local GPIO_PINS = {
     common.GPIO_FWD_MAIN,
@@ -45,6 +43,19 @@ mm_hv_hvil_healthy = false
 mm_hv_hvil_voltage = 0.0
 mm_hv_command_enable = false
 
+mm_hv_cmd_energize = false
+mm_hv_cmd_deenergize = false
+mm_hv_cmd_reset = false
+
+local precharge_start_ms = 0
+local precharge_telem_seen = false
+local PRECHARGE_TELEM_TIMEOUT_MS = 2000
+local PRECHARGE_FALLBACK_TIME_MS = 3000
+local EXPECTED_VOLTAGE = 133.2
+local CONTACTOR_SETTLE_MS = 50
+
+local prev_armed = false
+
 local STATE_NAMES = {
     [common.STATE_DE_ENERGIZED] = "DE_ENERGIZED",
     [common.STATE_PRECHARGING] = "PRECHARGING",
@@ -61,6 +72,20 @@ local function set_safe_state()
     for _, pin in ipairs(GPIO_PINS) do
         gpio:write(pin, GPIO_LOW)
     end
+end
+
+local function set_precharge_state()
+    gpio:write(common.GPIO_FWD_PRECHARGE, GPIO_HIGH)
+    gpio:write(common.GPIO_AFT_PRECHARGE, GPIO_HIGH)
+    gpio:write(common.GPIO_FWD_MAIN, GPIO_LOW)
+    gpio:write(common.GPIO_AFT_MAIN, GPIO_LOW)
+end
+
+local function set_energized_state()
+    gpio:write(common.GPIO_FWD_MAIN, GPIO_HIGH)
+    gpio:write(common.GPIO_AFT_MAIN, GPIO_HIGH)
+    gpio:write(common.GPIO_FWD_PRECHARGE, GPIO_LOW)
+    gpio:write(common.GPIO_AFT_PRECHARGE, GPIO_LOW)
 end
 
 local function init_gpio()
@@ -159,6 +184,182 @@ local function transition_state(new_state, reason)
             state_name(prev_state), state_name(new_state), reason))
 end
 
+local function is_undervoltage_fault(fault_code)
+    return fault_code == 0x02
+end
+
+local function check_dti_fault_non_precharge()
+    local fwd_fault = mm_dti_fault_fwd or 0
+    local aft_fault = mm_dti_fault_aft or 0
+    if fwd_fault ~= 0 then
+        return true, "DTI_FWD_FAULT"
+    end
+    if aft_fault ~= 0 then
+        return true, "DTI_AFT_FAULT"
+    end
+    return false, nil
+end
+
+local function check_dti_fault_precharge()
+    local fwd_fault = mm_dti_fault_fwd or 0
+    local aft_fault = mm_dti_fault_aft or 0
+    if fwd_fault ~= 0 and not is_undervoltage_fault(fwd_fault) then
+        return true, "DTI_FWD_FAULT"
+    end
+    if aft_fault ~= 0 and not is_undervoltage_fault(aft_fault) then
+        return true, "DTI_AFT_FAULT"
+    end
+    return false, nil
+end
+
+local function handle_de_energized()
+    set_safe_state()
+    mm_hv_command_enable = false
+
+    if mm_hv_cmd_energize then
+        mm_hv_cmd_energize = false
+        if can_energize() then
+            precharge_start_ms = millis():toint()
+            precharge_telem_seen = false
+            transition_state(common.STATE_PRECHARGING, "ENERGIZE_CMD")
+        end
+    end
+end
+
+local function handle_precharging()
+    set_precharge_state()
+    mm_hv_command_enable = false
+
+    local now_ms = millis():toint()
+    local elapsed_ms = now_ms - precharge_start_ms
+
+    local has_fault, fault_reason = check_dti_fault_precharge()
+    if has_fault then
+        emergency_shutdown(fault_reason)
+        return
+    end
+
+    if mm_hv_cmd_deenergize then
+        mm_hv_cmd_deenergize = false
+        set_safe_state()
+        transition_state(common.STATE_DE_ENERGIZED, "DEENERGIZE_CMD")
+        return
+    end
+
+    if elapsed_ms > common.PRECHARGE_TIMEOUT_MS then
+        emergency_shutdown("PRECHARGE_TIMEOUT")
+        return
+    end
+
+    local voltage_fwd = mm_dti_voltage_fwd or 0
+    local voltage_aft = mm_dti_voltage_aft or 0
+    local heartbeat_fwd = mm_dti_heartbeat_fwd or 0
+    local heartbeat_aft = mm_dti_heartbeat_aft or 0
+
+    local has_recent_telem = false
+    if heartbeat_fwd > precharge_start_ms or heartbeat_aft > precharge_start_ms then
+        has_recent_telem = true
+        precharge_telem_seen = true
+    end
+
+    local voltage_threshold = EXPECTED_VOLTAGE * common.PRECHARGE_THRESHOLD
+    local voltage_ok = false
+    if has_recent_telem then
+        local min_voltage = math.min(voltage_fwd, voltage_aft)
+        if min_voltage >= voltage_threshold then
+            voltage_ok = true
+        end
+    end
+
+    local time_ok = elapsed_ms >= common.PRECHARGE_MIN_TIME_MS
+
+    local complete = false
+    local reason = ""
+
+    if has_recent_telem and voltage_ok and time_ok then
+        complete = true
+        reason = string.format("VOLTAGE_OK_%.0fV", math.min(voltage_fwd, voltage_aft))
+    elseif not precharge_telem_seen and elapsed_ms >= PRECHARGE_TELEM_TIMEOUT_MS then
+        if elapsed_ms >= PRECHARGE_FALLBACK_TIME_MS then
+            complete = true
+            reason = "TIME_FALLBACK"
+            gcs:send_text(common.MAV_SEVERITY.WARNING,
+                "HV: Precharge fallback, DTI telemetry unavailable")
+        end
+    end
+
+    if complete then
+        set_energized_state()
+        transition_state(common.STATE_ENERGIZED, reason)
+    end
+end
+
+local function handle_energized()
+    set_energized_state()
+    mm_hv_command_enable = false
+
+    local has_fault, fault_reason = check_dti_fault_non_precharge()
+    if has_fault then
+        emergency_shutdown(fault_reason)
+        return
+    end
+
+    if mm_hv_cmd_deenergize then
+        mm_hv_cmd_deenergize = false
+        set_safe_state()
+        transition_state(common.STATE_DE_ENERGIZED, "DEENERGIZE_CMD")
+        return
+    end
+
+    local is_armed = arming:is_armed()
+    if is_armed and not prev_armed then
+        mm_hv_command_enable = true
+        transition_state(common.STATE_ARMED, "ARDUPILOT_ARM")
+    end
+    prev_armed = is_armed
+end
+
+local function handle_armed()
+    set_energized_state()
+    mm_hv_command_enable = true
+
+    local has_fault, fault_reason = check_dti_fault_non_precharge()
+    if has_fault then
+        emergency_shutdown(fault_reason)
+        return
+    end
+
+    if mm_hv_cmd_deenergize then
+        mm_hv_cmd_deenergize = false
+        mm_hv_command_enable = false
+        set_safe_state()
+        transition_state(common.STATE_DE_ENERGIZED, "DEENERGIZE_CMD")
+        return
+    end
+
+    local is_armed = arming:is_armed()
+    if not is_armed and prev_armed then
+        mm_hv_command_enable = false
+        transition_state(common.STATE_ENERGIZED, "ARDUPILOT_DISARM")
+    end
+    prev_armed = is_armed
+end
+
+local function handle_faulted()
+    set_safe_state()
+    mm_hv_command_enable = false
+
+    if mm_hv_cmd_reset then
+        mm_hv_cmd_reset = false
+        if can_energize() then
+            transition_state(common.STATE_DE_ENERGIZED, "FAULT_RESET")
+        else
+            gcs:send_text(common.MAV_SEVERITY.ERROR,
+                "HV: Reset blocked, HVIL not healthy")
+        end
+    end
+end
+
 local update
 
 function update()
@@ -166,11 +367,16 @@ function update()
         return update, common.HVIL_POLL_RATE_MS
     end
 
-    local _, hvil_status = is_hvil_healthy()
-
-    state_machine_counter = state_machine_counter + 1
-    if state_machine_counter >= STATE_MACHINE_DIVISOR then
-        state_machine_counter = 0
+    if hv_state == common.STATE_DE_ENERGIZED then
+        handle_de_energized()
+    elseif hv_state == common.STATE_PRECHARGING then
+        handle_precharging()
+    elseif hv_state == common.STATE_ENERGIZED then
+        handle_energized()
+    elseif hv_state == common.STATE_ARMED then
+        handle_armed()
+    elseif hv_state == common.STATE_FAULTED then
+        handle_faulted()
     end
 
     mm_hv_state = hv_state
