@@ -54,6 +54,7 @@ local telem_fwd = {
     temp_controller = 0,
     temp_motor = 0,
     fault_code = 0,
+    prev_fault_code = 0,
     id = 0,
     iq = 0,
     last_rx_ms = 0,
@@ -69,6 +70,7 @@ local telem_aft = {
     temp_controller = 0,
     temp_motor = 0,
     fault_code = 0,
+    prev_fault_code = 0,
     id = 0,
     iq = 0,
     last_rx_ms = 0,
@@ -91,10 +93,30 @@ local function parse_packet_0x01(frame, telem)
     telem.current_dc = common.scale_current(parse_i16_le(frame:data(2), frame:data(3)))
 end
 
+local function detect_fault_change(telem, rotor_name)
+    local current = telem.fault_code
+    local previous = telem.prev_fault_code
+
+    if current ~= previous then
+        if previous == 0 and current ~= 0 then
+            local fault_name = common.fault_name(current)
+            gcs:send_text(common.MAV_SEVERITY.CRITICAL,
+                string.format("DTI FAULT: %s %s (code 0x%02X)",
+                    rotor_name, fault_name, current))
+        elseif previous ~= 0 and current == 0 then
+            gcs:send_text(common.MAV_SEVERITY.INFO,
+                string.format("DTI %s: Fault cleared", rotor_name))
+        end
+        telem.prev_fault_code = current
+    end
+end
+
 local function parse_packet_0x02(frame, telem, rotor_name)
     local temp_ctrl = common.scale_temperature(parse_i16_le(frame:data(0), frame:data(1)))
     local temp_motor = common.scale_temperature(parse_i16_le(frame:data(2), frame:data(3)))
     telem.fault_code = frame:data(4)
+
+    detect_fault_change(telem, rotor_name)
 
     local sensor_fault = false
     if temp_ctrl < TEMP_SENSOR_MIN or temp_ctrl > TEMP_SENSOR_MAX then
@@ -191,6 +213,7 @@ mm_dti_current_ac_fwd = 0
 mm_dti_current_ac_aft = 0
 mm_dti_temp_sensor_fault_fwd = false
 mm_dti_temp_sensor_fault_aft = false
+mm_dti_fault_active = false
 
 local update
 
@@ -219,6 +242,7 @@ function update()
     mm_dti_current_ac_aft = telem_aft.current_ac
     mm_dti_temp_sensor_fault_fwd = telem_fwd.temp_sensor_fault
     mm_dti_temp_sensor_fault_aft = telem_aft.temp_sensor_fault
+    mm_dti_fault_active = (telem_fwd.fault_code ~= 0) or (telem_aft.fault_code ~= 0)
 
     if arming:is_armed() then
         local rsc_output = SRV_Channels:get_output_scaled(K_HELIRSC)
