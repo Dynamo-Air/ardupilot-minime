@@ -269,7 +269,8 @@ function update()
 
     update_esc_telemetry()
 
-    if arming:is_armed() then
+    local hv_cmd_enabled = mm_hv_command_enable or false
+    if arming:is_armed() and hv_cmd_enabled then
         local rsc_output = SRV_Channels:get_output_scaled(K_HELIRSC)
         if rsc_output then
             local erpm = math.floor((rsc_output / 1000.0) * common.ERPM_HOVER + 0.5)

@@ -29,6 +29,14 @@ M.GPIO_AFT_PRECHARGE = 53
 M.GPIO_FWD_STO = 54
 M.GPIO_AFT_STO = 55
 
+-- HVIL ADC configuration
+M.HVIL_ADC_PIN = 8               -- Cube Orange+ ADC port input (per hwdef)
+M.HVIL_POLL_RATE_MS = 20         -- 50 Hz polling
+M.HVIL_VOLTAGE_HEALTHY = 0.9     -- Loop closed voltage (V)
+M.HVIL_VOLTAGE_BROKEN = 5.0      -- Loop open voltage (V)
+M.HVIL_THRESHOLD = 2.5           -- Detection threshold (V)
+M.HVIL_RESPONSE_MS = 100         -- Max response time requirement (ms)
+
 -- HV state machine states
 M.STATE_DE_ENERGIZED = 0
 M.STATE_PRECHARGING = 1
