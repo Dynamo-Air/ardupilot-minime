@@ -27,6 +27,11 @@ local peak_delta_rpm = 0
 local peak_delta_pct = 0
 local prev_armed = false
 
+local desync_state = common.DESYNC_NORMAL
+local desync_below_threshold_ms = nil
+local last_desync_alert_ms = 0
+local DESYNC_ALERT_RATE_LIMIT_MS = 5000
+
 mm_tel_delta_rpm = 0
 mm_tel_delta_pct = 0
 mm_tel_delta_rpm_avg = 0
@@ -81,6 +86,87 @@ local function reset_on_disarm()
     rolling_buffer_idx = 1
     for i = 1, ROLLING_BUFFER_SIZE do
         rolling_buffer[i] = 0
+    end
+    desync_state = common.DESYNC_NORMAL
+    desync_below_threshold_ms = nil
+    last_desync_alert_ms = 0
+    mm_tel_desync_state = common.DESYNC_NORMAL
+end
+
+local function get_target_desync_state(delta_pct)
+    if delta_pct >= common.DESYNC_HARD_PCT then
+        return common.DESYNC_CRITICAL
+    elseif delta_pct >= common.DESYNC_WARNING_PCT then
+        return common.DESYNC_WARNING
+    elseif delta_pct >= common.DESYNC_ALERT_PCT then
+        return common.DESYNC_ALERT
+    else
+        return common.DESYNC_NORMAL
+    end
+end
+
+local function evaluate_desync_state(delta_pct, now_ms)
+    if is_spinup_suppressed() then
+        desync_state = common.DESYNC_NORMAL
+        desync_below_threshold_ms = nil
+        mm_tel_desync_state = desync_state
+        return false
+    end
+
+    local target_state = get_target_desync_state(delta_pct)
+
+    if target_state > desync_state then
+        desync_state = target_state
+        desync_below_threshold_ms = nil
+        mm_tel_desync_state = desync_state
+        return true
+    elseif target_state < desync_state then
+        if desync_below_threshold_ms == nil then
+            desync_below_threshold_ms = now_ms
+        elseif now_ms - desync_below_threshold_ms >= common.DESYNC_HYSTERESIS_MS then
+            desync_state = target_state
+            desync_below_threshold_ms = nil
+            mm_tel_desync_state = desync_state
+            return true
+        end
+    else
+        desync_below_threshold_ms = nil
+    end
+
+    mm_tel_desync_state = desync_state
+    return false
+end
+
+local function execute_desync_response(new_state, delta_rpm, delta_pct, now_ms)
+    if new_state == common.DESYNC_NORMAL then
+        return
+    end
+
+    if new_state == common.DESYNC_ALERT then
+        logger:write("DSYN", "St,dRPM,dPct", "Bff",
+            new_state,
+            delta_rpm,
+            delta_pct)
+        return
+    end
+
+    local should_alert = now_ms - last_desync_alert_ms >= DESYNC_ALERT_RATE_LIMIT_MS
+
+    if new_state == common.DESYNC_WARNING then
+        if should_alert then
+            gcs:send_text(common.MAV_SEVERITY.WARNING,
+                string.format("TEL: Desync WARNING delta %.1f RPM (%.2f%%)", delta_rpm, delta_pct))
+            last_desync_alert_ms = now_ms
+        end
+    elseif new_state == common.DESYNC_CRITICAL then
+        gcs:send_text(common.MAV_SEVERITY.CRITICAL,
+            string.format("TEL: Desync CRITICAL delta %.1f RPM (%.2f%%), RTL", delta_rpm, delta_pct))
+        last_desync_alert_ms = now_ms
+
+        local current_mode = vehicle:get_mode()
+        if current_mode ~= common.MODE_RTL and current_mode ~= common.MODE_LAND then
+            vehicle:set_mode(common.MODE_RTL)
+        end
     end
 end
 
@@ -138,6 +224,11 @@ function update()
     mm_tel_peak_delta_pct = peak_delta_pct
     mm_tel_calc_timestamp = now_ms
     mm_tel_spinup_suppressed = suppressed
+
+    local state_changed = evaluate_desync_state(delta_pct, now_ms)
+    if state_changed then
+        execute_desync_response(desync_state, delta_rpm, delta_pct, now_ms)
+    end
 
     local is_armed = arming:is_armed()
     if prev_armed and not is_armed then
