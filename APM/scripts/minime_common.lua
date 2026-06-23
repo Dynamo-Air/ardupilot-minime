@@ -71,6 +71,22 @@ M.DESYNC_HARD_RPM = 11.3
 -- Spin up suppression time after arming (milliseconds)
 M.SPINUP_SUPPRESS_MS = 5000
 
+-- Flight mode numbers for mode transitions
+M.MODE_STABILIZE = 0
+M.MODE_ALT_HOLD = 2
+M.MODE_RTL = 6
+M.MODE_LAND = 9
+
+-- Coolant temperature sensor indices (DroneCAN via Beyond Robotix node)
+M.COOLANT_MOTOR_SENSOR_INDEX = 0
+M.COOLANT_INVERTER_SENSOR_INDEX = 1
+
+-- Redline monitoring constants
+M.REDLINE_HYSTERESIS_PCT = 0.05
+M.OVERSPEED_THRESHOLD_PCT = 0.05
+M.OVERSPEED_DURATION_MS = 500
+M.REDLINE_ALERT_RATE_LIMIT_MS = 5000
+
 -- Redline thresholds: motor winding temperature (Celsius)
 M.REDLINE_MOTOR_WINDING = {
     caution = 80,

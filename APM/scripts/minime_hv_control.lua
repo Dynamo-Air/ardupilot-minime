@@ -47,6 +47,12 @@ mm_hv_cmd_energize = false
 mm_hv_cmd_deenergize = false
 mm_hv_cmd_reset = false
 
+mm_hv_redline_active = false
+mm_hv_redline_level = "normal"
+mm_hv_redline_param = ""
+mm_hv_derate_pct = 100
+mm_hv_saturate_rpm = false
+
 local precharge_start_ms = 0
 local precharge_telem_seen = false
 local PRECHARGE_TELEM_TIMEOUT_MS = 2000
@@ -59,6 +65,33 @@ local settling_start_ms = 0
 local settling_reason = ""
 
 local prev_armed = false
+
+local redline_state = {
+    motor_winding_fwd = nil,
+    motor_winding_aft = nil,
+    motor_part_fwd = nil,
+    motor_part_aft = nil,
+    inverter_temp_fwd = nil,
+    inverter_temp_aft = nil,
+    phase_current_fwd = nil,
+    phase_current_aft = nil,
+    dc_link_low_fwd = nil,
+    dc_link_low_aft = nil,
+    dc_link_high_fwd = nil,
+    dc_link_high_aft = nil,
+    battery_low = nil,
+    battery_high = nil,
+    coolant_motor = nil,
+    motor_rpm_fwd = nil,
+    motor_rpm_aft = nil
+}
+
+local redline_last_alert_ms = {}
+local overspeed_start_ms_fwd = nil
+local overspeed_start_ms_aft = nil
+local coolant_sensor_warned = false
+
+local SEVERITY_ORDER = { caution = 1, warning = 2, hard = 3 }
 
 local STATE_NAMES = {
     [common.STATE_DE_ENERGIZED] = "DE_ENERGIZED",
@@ -100,6 +133,487 @@ end
 local function open_precharge_ssrs()
     gpio:write(common.GPIO_FWD_PRECHARGE, GPIO_LOW)
     gpio:write(common.GPIO_AFT_PRECHARGE, GPIO_LOW)
+end
+
+local function get_hysteresis_threshold(redline, level, invert)
+    local threshold = redline[level]
+    if invert then
+        return threshold * (1 + common.REDLINE_HYSTERESIS_PCT)
+    else
+        return threshold * (1 - common.REDLINE_HYSTERESIS_PCT)
+    end
+end
+
+local function check_redline_hysteresis(value, redline, current_level, invert)
+    if value == nil then
+        return current_level
+    end
+
+    local new_level = common.check_redline(value, redline, invert)
+
+    if new_level == nil and current_level ~= nil then
+        local clear_threshold = get_hysteresis_threshold(redline, current_level, invert)
+        if invert then
+            if value < clear_threshold then
+                return current_level
+            end
+        else
+            if value > clear_threshold then
+                return current_level
+            end
+        end
+    end
+
+    if new_level ~= nil then
+        return new_level
+    end
+    return nil
+end
+
+local function should_alert(param_name, level)
+    local now_ms = millis():toint()
+    local key = param_name .. "_" .. level
+    local last_ms = redline_last_alert_ms[key] or 0
+    if now_ms - last_ms >= common.REDLINE_ALERT_RATE_LIMIT_MS then
+        redline_last_alert_ms[key] = now_ms
+        return true
+    end
+    return false
+end
+
+local function send_redline_alert(param_name, level, value, unit)
+    if level == "caution" then
+        if should_alert(param_name, level) then
+            gcs:send_text(common.MAV_SEVERITY.NOTICE,
+                string.format("HV REDLINE: %s caution %.1f%s", param_name, value, unit))
+        end
+    elseif level == "warning" then
+        if should_alert(param_name, level) then
+            gcs:send_text(common.MAV_SEVERITY.WARNING,
+                string.format("HV REDLINE: %s warning %.1f%s", param_name, value, unit))
+        end
+    elseif level == "hard" then
+        gcs:send_text(common.MAV_SEVERITY.CRITICAL,
+            string.format("HV REDLINE: %s HARD LIMIT %.1f%s", param_name, value, unit))
+    end
+end
+
+local function trigger_derate(percent, reason)
+    if mm_hv_derate_pct > percent then
+        mm_hv_derate_pct = percent
+        gcs:send_text(common.MAV_SEVERITY.WARNING,
+            string.format("HV: Power derate to %d%% (%s)", percent, reason))
+    end
+end
+
+local function trigger_rtl(reason)
+    local current_mode = vehicle:get_mode()
+    if current_mode ~= common.MODE_RTL and current_mode ~= common.MODE_LAND then
+        vehicle:set_mode(common.MODE_RTL)
+        gcs:send_text(common.MAV_SEVERITY.CRITICAL,
+            string.format("HV: RTL triggered (%s)", reason))
+    end
+end
+
+local function trigger_land(reason)
+    local current_mode = vehicle:get_mode()
+    if current_mode ~= common.MODE_LAND then
+        vehicle:set_mode(common.MODE_LAND)
+        gcs:send_text(common.MAV_SEVERITY.CRITICAL,
+            string.format("HV: LAND triggered (%s)", reason))
+    end
+end
+
+local function saturate_command(reason)
+    if not mm_hv_saturate_rpm then
+        mm_hv_saturate_rpm = true
+        gcs:send_text(common.MAV_SEVERITY.WARNING,
+            string.format("HV: Command saturated (%s)", reason))
+    end
+end
+
+local function read_coolant_motor_temp()
+    if not temperature_sensor then
+        return nil
+    end
+    local temp = temperature_sensor:get_temperature(common.COOLANT_MOTOR_SENSOR_INDEX)
+    return temp
+end
+
+local function check_uncommanded_overspeed()
+    local now_ms = millis():toint()
+    local cmd_fwd = mm_dti_command_rpm_fwd or 0
+    local cmd_aft = mm_dti_command_rpm_aft or 0
+    local actual_fwd = mm_dti_actual_rpm_fwd or 0
+    local actual_aft = mm_dti_actual_rpm_aft or 0
+
+    if cmd_fwd > 0 then
+        local threshold_fwd = cmd_fwd * (1 + common.OVERSPEED_THRESHOLD_PCT)
+        if actual_fwd > threshold_fwd then
+            if overspeed_start_ms_fwd == nil then
+                overspeed_start_ms_fwd = now_ms
+            elseif now_ms - overspeed_start_ms_fwd >= common.OVERSPEED_DURATION_MS then
+                emergency_shutdown("OVERSPEED_FWD")
+                return true
+            end
+        else
+            overspeed_start_ms_fwd = nil
+        end
+    else
+        overspeed_start_ms_fwd = nil
+    end
+
+    if cmd_aft > 0 then
+        local threshold_aft = cmd_aft * (1 + common.OVERSPEED_THRESHOLD_PCT)
+        if actual_aft > threshold_aft then
+            if overspeed_start_ms_aft == nil then
+                overspeed_start_ms_aft = now_ms
+            elseif now_ms - overspeed_start_ms_aft >= common.OVERSPEED_DURATION_MS then
+                emergency_shutdown("OVERSPEED_AFT")
+                return true
+            end
+        else
+            overspeed_start_ms_aft = nil
+        end
+    else
+        overspeed_start_ms_aft = nil
+    end
+
+    return false
+end
+
+local function check_redlines()
+    local worst_level = nil
+    local worst_param = ""
+
+    local sensor_fault_fwd = mm_dti_temp_sensor_fault_fwd or false
+    local sensor_fault_aft = mm_dti_temp_sensor_fault_aft or false
+
+    if not sensor_fault_fwd then
+        local temp = mm_dti_temp_motor_fwd or 0
+        local prev = redline_state.motor_winding_fwd
+        local level = check_redline_hysteresis(temp, common.REDLINE_MOTOR_WINDING, prev, false)
+        redline_state.motor_winding_fwd = level
+        if level then
+            send_redline_alert("MOTOR_TEMP_FWD", level, temp, "C")
+            if level == "hard" then
+                emergency_shutdown("MOTOR_TEMP_FWD")
+                return
+            end
+            if SEVERITY_ORDER[level] > (SEVERITY_ORDER[worst_level] or 0) then
+                worst_level = level
+                worst_param = "MOTOR_TEMP_FWD"
+            end
+        end
+    end
+
+    if not sensor_fault_aft then
+        local temp = mm_dti_temp_motor_aft or 0
+        local prev = redline_state.motor_winding_aft
+        local level = check_redline_hysteresis(temp, common.REDLINE_MOTOR_WINDING, prev, false)
+        redline_state.motor_winding_aft = level
+        if level then
+            send_redline_alert("MOTOR_TEMP_AFT", level, temp, "C")
+            if level == "hard" then
+                emergency_shutdown("MOTOR_TEMP_AFT")
+                return
+            end
+            if SEVERITY_ORDER[level] > (SEVERITY_ORDER[worst_level] or 0) then
+                worst_level = level
+                worst_param = "MOTOR_TEMP_AFT"
+            end
+        end
+    end
+
+    if not sensor_fault_fwd then
+        local temp = mm_dti_temp_motor_fwd or 0
+        local prev = redline_state.motor_part_fwd
+        local level = check_redline_hysteresis(temp, common.REDLINE_MOTOR_PART, prev, false)
+        redline_state.motor_part_fwd = level
+        if level then
+            send_redline_alert("MOTOR_PART_FWD", level, temp, "C")
+            if level == "hard" then
+                emergency_shutdown("MOTOR_PART_FWD")
+                return
+            end
+            if SEVERITY_ORDER[level] > (SEVERITY_ORDER[worst_level] or 0) then
+                worst_level = level
+                worst_param = "MOTOR_PART_FWD"
+            end
+        end
+    end
+
+    if not sensor_fault_aft then
+        local temp = mm_dti_temp_motor_aft or 0
+        local prev = redline_state.motor_part_aft
+        local level = check_redline_hysteresis(temp, common.REDLINE_MOTOR_PART, prev, false)
+        redline_state.motor_part_aft = level
+        if level then
+            send_redline_alert("MOTOR_PART_AFT", level, temp, "C")
+            if level == "hard" then
+                emergency_shutdown("MOTOR_PART_AFT")
+                return
+            end
+            if SEVERITY_ORDER[level] > (SEVERITY_ORDER[worst_level] or 0) then
+                worst_level = level
+                worst_param = "MOTOR_PART_AFT"
+            end
+        end
+    end
+
+    if not sensor_fault_fwd then
+        local temp = mm_dti_temp_ctrl_fwd or 0
+        local prev = redline_state.inverter_temp_fwd
+        local level = check_redline_hysteresis(temp, common.REDLINE_COOLANT_INVERTER, prev, false)
+        redline_state.inverter_temp_fwd = level
+        if level then
+            send_redline_alert("INVERTER_TEMP_FWD", level, temp, "C")
+            if level == "hard" then
+                trigger_derate(50, "INVERTER_TEMP_FWD")
+            elseif level == "warning" then
+                trigger_derate(75, "INVERTER_TEMP_FWD")
+            end
+            if SEVERITY_ORDER[level] > (SEVERITY_ORDER[worst_level] or 0) then
+                worst_level = level
+                worst_param = "INVERTER_TEMP_FWD"
+            end
+        end
+    end
+
+    if not sensor_fault_aft then
+        local temp = mm_dti_temp_ctrl_aft or 0
+        local prev = redline_state.inverter_temp_aft
+        local level = check_redline_hysteresis(temp, common.REDLINE_COOLANT_INVERTER, prev, false)
+        redline_state.inverter_temp_aft = level
+        if level then
+            send_redline_alert("INVERTER_TEMP_AFT", level, temp, "C")
+            if level == "hard" then
+                trigger_derate(50, "INVERTER_TEMP_AFT")
+            elseif level == "warning" then
+                trigger_derate(75, "INVERTER_TEMP_AFT")
+            end
+            if SEVERITY_ORDER[level] > (SEVERITY_ORDER[worst_level] or 0) then
+                worst_level = level
+                worst_param = "INVERTER_TEMP_AFT"
+            end
+        end
+    end
+
+    do
+        local current_fwd = mm_dti_current_ac_fwd or 0
+        local prev = redline_state.phase_current_fwd
+        local level = check_redline_hysteresis(current_fwd, common.REDLINE_PHASE_CURRENT, prev, false)
+        redline_state.phase_current_fwd = level
+        if level then
+            send_redline_alert("PHASE_CURR_FWD", level, current_fwd, "A")
+            if level == "hard" then
+                saturate_command("PHASE_CURR_FWD")
+            end
+            if SEVERITY_ORDER[level] > (SEVERITY_ORDER[worst_level] or 0) then
+                worst_level = level
+                worst_param = "PHASE_CURR_FWD"
+            end
+        end
+    end
+
+    do
+        local current_aft = mm_dti_current_ac_aft or 0
+        local prev = redline_state.phase_current_aft
+        local level = check_redline_hysteresis(current_aft, common.REDLINE_PHASE_CURRENT, prev, false)
+        redline_state.phase_current_aft = level
+        if level then
+            send_redline_alert("PHASE_CURR_AFT", level, current_aft, "A")
+            if level == "hard" then
+                saturate_command("PHASE_CURR_AFT")
+            end
+            if SEVERITY_ORDER[level] > (SEVERITY_ORDER[worst_level] or 0) then
+                worst_level = level
+                worst_param = "PHASE_CURR_AFT"
+            end
+        end
+    end
+
+    do
+        local voltage_fwd = mm_dti_voltage_fwd or 0
+        local prev = redline_state.dc_link_low_fwd
+        local level = check_redline_hysteresis(voltage_fwd, common.REDLINE_DC_LINK_LOW, prev, true)
+        redline_state.dc_link_low_fwd = level
+        if level then
+            send_redline_alert("DC_LINK_LOW_FWD", level, voltage_fwd, "V")
+            if level == "hard" then
+                emergency_shutdown("DC_LINK_LOW_FWD")
+                return
+            end
+            if SEVERITY_ORDER[level] > (SEVERITY_ORDER[worst_level] or 0) then
+                worst_level = level
+                worst_param = "DC_LINK_LOW_FWD"
+            end
+        end
+    end
+
+    do
+        local voltage_aft = mm_dti_voltage_aft or 0
+        local prev = redline_state.dc_link_low_aft
+        local level = check_redline_hysteresis(voltage_aft, common.REDLINE_DC_LINK_LOW, prev, true)
+        redline_state.dc_link_low_aft = level
+        if level then
+            send_redline_alert("DC_LINK_LOW_AFT", level, voltage_aft, "V")
+            if level == "hard" then
+                emergency_shutdown("DC_LINK_LOW_AFT")
+                return
+            end
+            if SEVERITY_ORDER[level] > (SEVERITY_ORDER[worst_level] or 0) then
+                worst_level = level
+                worst_param = "DC_LINK_LOW_AFT"
+            end
+        end
+    end
+
+    do
+        local voltage_fwd = mm_dti_voltage_fwd or 0
+        local prev = redline_state.dc_link_high_fwd
+        local level = check_redline_hysteresis(voltage_fwd, common.REDLINE_DC_LINK_HIGH, prev, false)
+        redline_state.dc_link_high_fwd = level
+        if level then
+            send_redline_alert("DC_LINK_HIGH_FWD", level, voltage_fwd, "V")
+            if level == "hard" then
+                emergency_shutdown("DC_LINK_HIGH_FWD")
+                return
+            end
+            if SEVERITY_ORDER[level] > (SEVERITY_ORDER[worst_level] or 0) then
+                worst_level = level
+                worst_param = "DC_LINK_HIGH_FWD"
+            end
+        end
+    end
+
+    do
+        local voltage_aft = mm_dti_voltage_aft or 0
+        local prev = redline_state.dc_link_high_aft
+        local level = check_redline_hysteresis(voltage_aft, common.REDLINE_DC_LINK_HIGH, prev, false)
+        redline_state.dc_link_high_aft = level
+        if level then
+            send_redline_alert("DC_LINK_HIGH_AFT", level, voltage_aft, "V")
+            if level == "hard" then
+                emergency_shutdown("DC_LINK_HIGH_AFT")
+                return
+            end
+            if SEVERITY_ORDER[level] > (SEVERITY_ORDER[worst_level] or 0) then
+                worst_level = level
+                worst_param = "DC_LINK_HIGH_AFT"
+            end
+        end
+    end
+
+    do
+        local voltage_min = math.min(mm_dti_voltage_fwd or 999, mm_dti_voltage_aft or 999)
+        local prev = redline_state.battery_low
+        local level = check_redline_hysteresis(voltage_min, common.REDLINE_BATTERY_LOW, prev, true)
+        redline_state.battery_low = level
+        if level then
+            send_redline_alert("BATTERY_LOW", level, voltage_min, "V")
+            if level == "hard" then
+                trigger_land("BATTERY_LOW")
+            end
+            if SEVERITY_ORDER[level] > (SEVERITY_ORDER[worst_level] or 0) then
+                worst_level = level
+                worst_param = "BATTERY_LOW"
+            end
+        end
+    end
+
+    do
+        local voltage_max = math.max(mm_dti_voltage_fwd or 0, mm_dti_voltage_aft or 0)
+        local prev = redline_state.battery_high
+        local level = check_redline_hysteresis(voltage_max, common.REDLINE_BATTERY_HIGH, prev, false)
+        redline_state.battery_high = level
+        if level then
+            send_redline_alert("BATTERY_HIGH", level, voltage_max, "V")
+        end
+    end
+
+    do
+        local coolant_temp = read_coolant_motor_temp()
+        if coolant_temp then
+            local prev = redline_state.coolant_motor
+            local level = check_redline_hysteresis(coolant_temp, common.REDLINE_COOLANT_MOTOR, prev, false)
+            redline_state.coolant_motor = level
+            if level then
+                send_redline_alert("COOLANT_MOTOR", level, coolant_temp, "C")
+                if level == "hard" then
+                    trigger_derate(50, "COOLANT_MOTOR")
+                    trigger_rtl("COOLANT_MOTOR")
+                elseif level == "warning" then
+                    trigger_derate(75, "COOLANT_MOTOR")
+                end
+                if SEVERITY_ORDER[level] > (SEVERITY_ORDER[worst_level] or 0) then
+                    worst_level = level
+                    worst_param = "COOLANT_MOTOR"
+                end
+            end
+        elseif not coolant_sensor_warned then
+            gcs:send_text(common.MAV_SEVERITY.NOTICE, "HV: Coolant temp sensor not available")
+            coolant_sensor_warned = true
+        end
+    end
+
+    do
+        local rpm_fwd = mm_dti_actual_rpm_fwd or 0
+        local motor_rpm_fwd = rpm_fwd * common.GEARBOX_RATIO
+        local prev = redline_state.motor_rpm_fwd
+        local level = check_redline_hysteresis(motor_rpm_fwd, common.REDLINE_MOTOR_RPM, prev, false)
+        redline_state.motor_rpm_fwd = level
+        if level then
+            send_redline_alert("MOTOR_RPM_FWD", level, motor_rpm_fwd, "")
+            if level == "hard" then
+                saturate_command("MOTOR_RPM_FWD")
+            end
+            if SEVERITY_ORDER[level] > (SEVERITY_ORDER[worst_level] or 0) then
+                worst_level = level
+                worst_param = "MOTOR_RPM_FWD"
+            end
+        end
+    end
+
+    do
+        local rpm_aft = mm_dti_actual_rpm_aft or 0
+        local motor_rpm_aft = rpm_aft * common.GEARBOX_RATIO
+        local prev = redline_state.motor_rpm_aft
+        local level = check_redline_hysteresis(motor_rpm_aft, common.REDLINE_MOTOR_RPM, prev, false)
+        redline_state.motor_rpm_aft = level
+        if level then
+            send_redline_alert("MOTOR_RPM_AFT", level, motor_rpm_aft, "")
+            if level == "hard" then
+                saturate_command("MOTOR_RPM_AFT")
+            end
+            if SEVERITY_ORDER[level] > (SEVERITY_ORDER[worst_level] or 0) then
+                worst_level = level
+                worst_param = "MOTOR_RPM_AFT"
+            end
+        end
+    end
+
+    if check_uncommanded_overspeed() then
+        return
+    end
+
+    mm_hv_redline_active = (worst_level ~= nil)
+    mm_hv_redline_level = worst_level or "normal"
+    mm_hv_redline_param = worst_param
+end
+
+local function reset_redline_state()
+    for k, _ in pairs(redline_state) do
+        redline_state[k] = nil
+    end
+    redline_last_alert_ms = {}
+    overspeed_start_ms_fwd = nil
+    overspeed_start_ms_aft = nil
+    mm_hv_redline_active = false
+    mm_hv_redline_level = "normal"
+    mm_hv_redline_param = ""
+    mm_hv_derate_pct = 100
+    mm_hv_saturate_rpm = false
 end
 
 local function init_gpio()
@@ -147,6 +661,7 @@ local function emergency_shutdown(reason)
     mm_hv_command_enable = false
 
     set_safe_state()
+    reset_redline_state()
 
     local prev_state = hv_state
     hv_state = common.STATE_FAULTED
@@ -339,8 +854,14 @@ local function handle_energized()
         return
     end
 
+    check_redlines()
+    if hv_state == common.STATE_FAULTED then
+        return
+    end
+
     if mm_hv_cmd_deenergize then
         mm_hv_cmd_deenergize = false
+        reset_redline_state()
         set_safe_state()
         transition_state(common.STATE_DE_ENERGIZED, "DEENERGIZE_CMD")
         return
@@ -364,9 +885,15 @@ local function handle_armed()
         return
     end
 
+    check_redlines()
+    if hv_state == common.STATE_FAULTED then
+        return
+    end
+
     if mm_hv_cmd_deenergize then
         mm_hv_cmd_deenergize = false
         mm_hv_command_enable = false
+        reset_redline_state()
         set_safe_state()
         transition_state(common.STATE_DE_ENERGIZED, "DEENERGIZE_CMD")
         return
@@ -375,6 +902,7 @@ local function handle_armed()
     local is_armed = arming:is_armed()
     if not is_armed and prev_armed then
         mm_hv_command_enable = false
+        reset_redline_state()
         transition_state(common.STATE_ENERGIZED, "ARDUPILOT_DISARM")
     end
     prev_armed = is_armed
