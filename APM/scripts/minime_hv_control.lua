@@ -11,6 +11,41 @@
 
    HVIL monitoring uses ADC input per SPECS.md Section 9.7
    Voltage thresholds: healthy ~0.9V, broken ~5V, threshold 2.5V
+
+   Inter-Script Interface:
+   Outputs (mm_hv_ prefix, updated at 50 Hz):
+     mm_hv_state                  Current state (0=de_energized through 4=faulted)
+     mm_hv_state_name             Human readable state name
+     mm_hv_command_enable         CAN command enable flag (read by DTI driver)
+     mm_hv_fault_reason           Last fault reason string or empty
+     mm_hv_last_state_change_ms   Timestamp of last state transition
+     mm_hv_gpio_initialized       GPIO initialization status
+     mm_hv_hvil_healthy           HVIL loop healthy status
+     mm_hv_hvil_voltage           HVIL ADC voltage reading
+     mm_hv_cmd_energize           Command input: request energize
+     mm_hv_cmd_deenergize         Command input: request de-energize
+     mm_hv_cmd_reset              Command input: request fault reset
+     mm_hv_redline_active         Any redline condition active
+     mm_hv_redline_level          Worst redline level (normal/caution/warning/hard)
+     mm_hv_redline_param          Parameter causing worst redline
+     mm_hv_derate_pct             Power derate percentage (100 = full power)
+     mm_hv_saturate_rpm           RPM command saturation active
+     mm_hv_single_rotor_fault     Single rotor failure detected
+     mm_hv_estop_active           E-stop switch is active
+     mm_hv_coolant_motor_temp     Motor coolant inlet temperature or nil
+     mm_hv_coolant_motor_sensor_ok Coolant temperature sensor status
+
+   Inputs (read from DTI driver):
+     mm_dti_voltage_fwd, mm_dti_voltage_aft       DC link voltage for precharge monitoring
+     mm_dti_fault_fwd, mm_dti_fault_aft           DTI fault codes for fault detection
+     mm_dti_heartbeat_fwd, mm_dti_heartbeat_aft   Telemetry timestamps for heartbeat check
+     mm_dti_temp_motor_fwd, mm_dti_temp_motor_aft Motor temps for redline monitoring
+     mm_dti_temp_ctrl_fwd, mm_dti_temp_ctrl_aft   Controller temps for redline monitoring
+     mm_dti_current_ac_fwd, mm_dti_current_ac_aft Phase current for redline monitoring
+     mm_dti_current_dc_fwd, mm_dti_current_dc_aft DC current for single rotor detection
+     mm_dti_actual_rpm_fwd, mm_dti_actual_rpm_aft Actual RPM for overspeed/failure detection
+     mm_dti_command_rpm_fwd, mm_dti_command_rpm_aft Commanded RPM for overspeed detection
+     mm_dti_temp_sensor_fault_fwd, mm_dti_temp_sensor_fault_aft Sensor fault flags
 ]]--
 
 local common = require("minime_common")

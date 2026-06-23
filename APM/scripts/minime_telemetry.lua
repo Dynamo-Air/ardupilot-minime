@@ -7,7 +7,35 @@
      minime_hv_control.lua loaded (provides mm_hv_* globals)
      minime_common.lua available
 
-   Exposes globals with mm_tel_ prefix for inter-script communication
+   Inter-Script Interface:
+   Outputs (mm_tel_ prefix, updated at 50 Hz):
+     mm_tel_desync_state       Desync state (0=normal, 1=alert, 2=warning, 3=critical)
+     mm_tel_rpm_diff           Current RPM differential (absolute value)
+     mm_tel_delta_rpm          Alias for mm_tel_rpm_diff
+     mm_tel_delta_pct          RPM differential as percentage of hover RPM
+     mm_tel_delta_rpm_avg      Rolling average RPM differential (200 ms window)
+     mm_tel_peak_delta_rpm     Peak RPM differential since arm
+     mm_tel_peak_delta_pct     Peak percentage since arm
+     mm_tel_calc_timestamp     Timestamp of last calculation in ms
+     mm_tel_data_valid         True if telemetry data is fresh and valid
+     mm_tel_spinup_suppressed  True during 5 second spinup suppression window
+     mm_tel_rpm_fwd_filtered   Low pass filtered forward RPM
+     mm_tel_rpm_aft_filtered   Low pass filtered aft RPM
+
+   Inputs (read from other scripts):
+     mm_dti_actual_rpm_fwd, mm_dti_actual_rpm_aft   Actual RPM from DTI telemetry
+     mm_dti_heartbeat_fwd, mm_dti_heartbeat_aft     Timestamps for freshness check
+     mm_dti_voltage_fwd, mm_dti_voltage_aft         DC link voltage for precharge display
+     mm_dti_fault_fwd, mm_dti_fault_aft             Fault codes for NAMED_VALUE publishing
+     mm_hv_state                                    HV state for state publishing
+     mm_hv_last_state_change_ms                     State change timestamp for spinup suppression
+
+   Interface for Test Modes (minime_test_modes.lua):
+     Test modes reads these globals for synchronized rotor control:
+       mm_tel_rpm_fwd_filtered, mm_tel_rpm_aft_filtered (current filtered RPM)
+       mm_tel_desync_state (desync alert level for abort conditions)
+       mm_dti_actual_rpm_fwd, mm_dti_actual_rpm_aft (raw RPM values)
+       mm_hv_state (HV state for test mode lockout checks)
 ]]--
 
 local common = require("minime_common")

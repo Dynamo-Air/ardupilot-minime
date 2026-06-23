@@ -301,3 +301,78 @@ function M.check_redline(value, redline, invert)
 end
 
 return M
+
+--[[
+   Inter-Script Communication Contract
+   Reference: TODO.md Section 2.1a
+
+   All MiniMe scripts share data via global variables with prefixed namespaces.
+   Scripts may load in any order. Dependent scripts should check for nil values
+   before accessing shared globals. Data older than 500 ms should be considered stale.
+
+   DTI Driver Outputs (mm_dti_ prefix, updated at 100 Hz command / 50 Hz telemetry):
+     mm_dti_command_rpm_fwd    number   Last commanded rotor RPM for forward rotor
+     mm_dti_command_rpm_aft    number   Last commanded rotor RPM for aft rotor
+     mm_dti_actual_rpm_fwd     number   Actual rotor RPM from DTI telemetry, forward
+     mm_dti_actual_rpm_aft     number   Actual rotor RPM from DTI telemetry, aft
+     mm_dti_voltage_fwd        number   DC link voltage in volts, forward
+     mm_dti_voltage_aft        number   DC link voltage in volts, aft
+     mm_dti_fault_fwd          integer  DTI fault code, forward (0 = no fault)
+     mm_dti_fault_aft          integer  DTI fault code, aft (0 = no fault)
+     mm_dti_heartbeat_fwd      integer  Last telemetry timestamp in ms, forward
+     mm_dti_heartbeat_aft      integer  Last telemetry timestamp in ms, aft
+     mm_dti_temp_motor_fwd     number   Motor temperature in Celsius, forward
+     mm_dti_temp_motor_aft     number   Motor temperature in Celsius, aft
+     mm_dti_temp_ctrl_fwd      number   Controller temperature in Celsius, forward
+     mm_dti_temp_ctrl_aft      number   Controller temperature in Celsius, aft
+     mm_dti_current_dc_fwd     number   DC bus current in Amps, forward
+     mm_dti_current_dc_aft     number   DC bus current in Amps, aft
+     mm_dti_current_ac_fwd     number   AC phase current RMS in Amps, forward
+     mm_dti_current_ac_aft     number   AC phase current RMS in Amps, aft
+     mm_dti_temp_sensor_fault_fwd  boolean  Temperature sensor fault flag, forward
+     mm_dti_temp_sensor_fault_aft  boolean  Temperature sensor fault flag, aft
+     mm_dti_fault_active       boolean  True if any DTI fault is active
+
+   HV Control Outputs (mm_hv_ prefix, updated at 50 Hz):
+     mm_hv_state               integer  Current HV state (0=de_energized through 4=faulted)
+     mm_hv_state_name          string   Human readable state name
+     mm_hv_command_enable      boolean  CAN commands enabled flag (DTI driver reads this)
+     mm_hv_fault_reason        string   Last fault reason or empty string
+     mm_hv_last_state_change_ms integer Timestamp of last state transition
+     mm_hv_gpio_initialized    boolean  GPIO initialization status
+     mm_hv_hvil_healthy        boolean  HVIL loop healthy status
+     mm_hv_hvil_voltage        number   HVIL ADC voltage reading
+     mm_hv_cmd_energize        boolean  Command input: request energize
+     mm_hv_cmd_deenergize      boolean  Command input: request de-energize
+     mm_hv_cmd_reset           boolean  Command input: request fault reset
+     mm_hv_redline_active      boolean  Any redline condition active
+     mm_hv_redline_level       string   Worst redline level (normal/caution/warning/hard)
+     mm_hv_redline_param       string   Parameter causing worst redline
+     mm_hv_derate_pct          integer  Power derate percentage (100 = full power)
+     mm_hv_saturate_rpm        boolean  RPM command saturation active
+     mm_hv_single_rotor_fault  boolean  Single rotor failure detected
+     mm_hv_estop_active        boolean  E-stop switch is active
+     mm_hv_coolant_motor_temp  number   Motor coolant inlet temperature or nil
+     mm_hv_coolant_motor_sensor_ok boolean Coolant temperature sensor status
+
+   Telemetry Outputs (mm_tel_ prefix, updated at 50 Hz):
+     mm_tel_desync_state       integer  Desync state (0=normal, 1=alert, 2=warning, 3=critical)
+     mm_tel_rpm_diff           number   Current RPM differential (absolute value)
+     mm_tel_delta_rpm          number   Alias for mm_tel_rpm_diff
+     mm_tel_delta_pct          number   RPM differential as percentage of hover RPM
+     mm_tel_delta_rpm_avg      number   Rolling average RPM differential (200 ms window)
+     mm_tel_peak_delta_rpm     number   Peak RPM differential since arm
+     mm_tel_peak_delta_pct     number   Peak percentage since arm
+     mm_tel_calc_timestamp     integer  Timestamp of last calculation in ms
+     mm_tel_data_valid         boolean  True if telemetry data is fresh and valid
+     mm_tel_spinup_suppressed  boolean  True during 5 second spinup suppression window
+     mm_tel_rpm_fwd_filtered   number   Low pass filtered forward RPM
+     mm_tel_rpm_aft_filtered   number   Low pass filtered aft RPM
+
+   Telemetry to Test Modes Interface:
+     Test modes (minime_test_modes.lua) reads the following for synchronization:
+       mm_tel_rpm_fwd_filtered, mm_tel_rpm_aft_filtered (current filtered RPM)
+       mm_tel_desync_state (desync alert level)
+       mm_dti_actual_rpm_fwd, mm_dti_actual_rpm_aft (raw RPM values)
+       mm_hv_state (current HV state for mode lockout checks)
+]]--

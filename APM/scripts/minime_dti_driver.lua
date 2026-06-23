@@ -7,6 +7,23 @@
      CAN_D1_PROTOCOL = 10
      CAN_D1_BITRATE = 500000
      Reboot required after parameter changes
+
+   Inter-Script Interface:
+   Outputs (mm_dti_ prefix, updated each cycle):
+     mm_dti_command_rpm_fwd, mm_dti_command_rpm_aft     Commanded rotor RPM (100 Hz when armed)
+     mm_dti_actual_rpm_fwd, mm_dti_actual_rpm_aft       Actual rotor RPM from telemetry (50 Hz)
+     mm_dti_voltage_fwd, mm_dti_voltage_aft             DC link voltage in volts
+     mm_dti_fault_fwd, mm_dti_fault_aft                 DTI fault codes (0 = no fault)
+     mm_dti_heartbeat_fwd, mm_dti_heartbeat_aft         Last telemetry timestamp in ms
+     mm_dti_temp_motor_fwd, mm_dti_temp_motor_aft       Motor temperature in Celsius
+     mm_dti_temp_ctrl_fwd, mm_dti_temp_ctrl_aft         Controller temperature in Celsius
+     mm_dti_current_dc_fwd, mm_dti_current_dc_aft       DC bus current in Amps
+     mm_dti_current_ac_fwd, mm_dti_current_ac_aft       AC phase current RMS in Amps
+     mm_dti_temp_sensor_fault_fwd, mm_dti_temp_sensor_fault_aft   Sensor fault flags
+     mm_dti_fault_active                                True if any DTI fault is active
+
+   Inputs (read from other scripts):
+     mm_hv_command_enable      HV control flag enabling CAN command transmission
 ]]--
 
 local common = require("minime_common")
