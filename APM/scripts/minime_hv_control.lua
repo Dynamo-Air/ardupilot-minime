@@ -59,6 +59,9 @@ mm_hv_saturate_rpm = false
 mm_hv_single_rotor_fault = false
 mm_hv_estop_active = false
 
+mm_hv_coolant_motor_temp = nil
+mm_hv_coolant_motor_sensor_ok = false
+
 local precharge_start_ms = 0
 local precharge_telem_seen = false
 local PRECHARGE_TELEM_TIMEOUT_MS = 2000
@@ -638,6 +641,8 @@ local function check_redlines()
     do
         local coolant_temp = read_coolant_motor_temp()
         if coolant_temp then
+            mm_hv_coolant_motor_temp = coolant_temp
+            mm_hv_coolant_motor_sensor_ok = true
             local prev = redline_state.coolant_motor
             local level = check_redline_hysteresis(coolant_temp, common.REDLINE_COOLANT_MOTOR, prev, false)
             redline_state.coolant_motor = level
@@ -654,9 +659,12 @@ local function check_redlines()
                     worst_param = "COOLANT_MOTOR"
                 end
             end
-        elseif not coolant_sensor_warned then
-            gcs:send_text(common.MAV_SEVERITY.NOTICE, "HV: Coolant temp sensor not available")
-            coolant_sensor_warned = true
+        else
+            mm_hv_coolant_motor_sensor_ok = false
+            if not coolant_sensor_warned then
+                gcs:send_text(common.MAV_SEVERITY.NOTICE, "HV: Coolant temp sensor not available")
+                coolant_sensor_warned = true
+            end
         end
     end
 
@@ -720,6 +728,9 @@ local function reset_redline_state()
     mm_hv_derate_pct = 100
     mm_hv_saturate_rpm = false
     mm_hv_single_rotor_fault = false
+    mm_hv_coolant_motor_temp = nil
+    mm_hv_coolant_motor_sensor_ok = false
+    coolant_sensor_warned = false
 end
 
 local function init_gpio()
