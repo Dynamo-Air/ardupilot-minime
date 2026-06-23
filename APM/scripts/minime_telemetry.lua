@@ -14,6 +14,8 @@ local common = require("minime_common")
 
 local LPF_ALPHA = 0.3
 local ROLLING_BUFFER_SIZE = 10
+local EXPECTED_VOLTAGE = 133.2
+local PUBLISH_DIVIDER = 5
 
 local lpf_rpm_fwd = 0
 local lpf_rpm_aft = 0
@@ -31,6 +33,12 @@ local desync_state = common.DESYNC_NORMAL
 local desync_below_threshold_ms = nil
 local last_desync_alert_ms = 0
 local DESYNC_ALERT_RATE_LIMIT_MS = 5000
+
+local prev_hv_state = nil
+local prev_fault_fwd = nil
+local prev_fault_aft = nil
+local prev_desync_state_pub = nil
+local publish_counter = 0
 
 mm_tel_delta_rpm = 0
 mm_tel_delta_pct = 0
@@ -170,6 +178,68 @@ local function execute_desync_response(new_state, delta_rpm, delta_pct, now_ms)
     end
 end
 
+local function publish_named_values()
+    local current_hv_state = mm_hv_state or common.STATE_DE_ENERGIZED
+    if prev_hv_state ~= current_hv_state then
+        gcs:send_named_float("HV_STATE", current_hv_state)
+        prev_hv_state = current_hv_state
+    end
+
+    local current_fault_fwd = mm_dti_fault_fwd or 0
+    if prev_fault_fwd ~= current_fault_fwd then
+        gcs:send_named_float("DTI_F_FLT", current_fault_fwd)
+        prev_fault_fwd = current_fault_fwd
+    end
+
+    local current_fault_aft = mm_dti_fault_aft or 0
+    if prev_fault_aft ~= current_fault_aft then
+        gcs:send_named_float("DTI_A_FLT", current_fault_aft)
+        prev_fault_aft = current_fault_aft
+    end
+
+    if prev_desync_state_pub ~= desync_state then
+        gcs:send_named_float("DESYNC_ST", desync_state)
+        prev_desync_state_pub = desync_state
+    end
+
+    publish_counter = publish_counter + 1
+    if publish_counter >= PUBLISH_DIVIDER then
+        publish_counter = 0
+
+        gcs:send_named_float("RPM_DIFF", mm_tel_delta_rpm)
+
+        if current_hv_state == common.STATE_PRECHARGING then
+            local voltage_fwd = mm_dti_voltage_fwd or 0
+            local voltage_aft = mm_dti_voltage_aft or 0
+            local min_voltage = math.min(voltage_fwd, voltage_aft)
+            local pct = (min_voltage / EXPECTED_VOLTAGE) * 100
+            if pct > 100 then
+                pct = 100
+            end
+            gcs:send_named_float("PRECHG_V", pct)
+        end
+    end
+end
+
+local function publish_initial_values()
+    local hv_state = mm_hv_state or common.STATE_DE_ENERGIZED
+    gcs:send_named_float("HV_STATE", hv_state)
+    prev_hv_state = hv_state
+
+    local fault_fwd = mm_dti_fault_fwd or 0
+    gcs:send_named_float("DTI_F_FLT", fault_fwd)
+    prev_fault_fwd = fault_fwd
+
+    local fault_aft = mm_dti_fault_aft or 0
+    gcs:send_named_float("DTI_A_FLT", fault_aft)
+    prev_fault_aft = fault_aft
+
+    gcs:send_named_float("DESYNC_ST", common.DESYNC_NORMAL)
+    prev_desync_state_pub = common.DESYNC_NORMAL
+
+    gcs:send_named_float("RPM_DIFF", 0)
+end
+
 local update
 
 function update()
@@ -185,6 +255,7 @@ function update()
 
     if not fwd_valid or not aft_valid then
         mm_tel_data_valid = false
+        publish_named_values()
         return update, common.DTI_TELEMETRY_RATE_MS
     end
 
@@ -236,6 +307,8 @@ function update()
     end
     prev_armed = is_armed
 
+    publish_named_values()
+
     return update, common.DTI_TELEMETRY_RATE_MS
 end
 
@@ -258,6 +331,8 @@ local function init()
     mm_tel_rpm_diff = 0
 
     gcs:send_text(common.MAV_SEVERITY.INFO, "TEL: Telemetry aggregation initialized")
+
+    publish_initial_values()
 
     return update, common.DTI_TELEMETRY_RATE_MS
 end
