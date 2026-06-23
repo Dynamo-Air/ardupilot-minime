@@ -27,6 +27,9 @@ local state_entry_ms = 0
 local hvil_adc = nil
 local hvil_initialized = false
 
+local estop_channel = nil
+local estop_initialized = false
+
 local GPIO_PINS = {
     common.GPIO_FWD_MAIN,
     common.GPIO_FWD_PRECHARGE,
@@ -52,6 +55,9 @@ mm_hv_redline_level = "normal"
 mm_hv_redline_param = ""
 mm_hv_derate_pct = 100
 mm_hv_saturate_rpm = false
+
+mm_hv_single_rotor_fault = false
+mm_hv_estop_active = false
 
 local precharge_start_ms = 0
 local precharge_telem_seen = false
@@ -657,7 +663,35 @@ local function is_hvil_healthy()
     return true, "HVIL_OK"
 end
 
+local function find_estop_channel()
+    local channel = rc:find_channel_for_option(common.RC_OPTION_MOTOR_ESTOP)
+    if channel then
+        estop_channel = channel:ch_num()
+        estop_initialized = true
+        return true
+    end
+    return false
+end
+
+local function check_estop_active()
+    if not estop_initialized or estop_channel == nil then
+        mm_hv_estop_active = false
+        return false
+    end
+
+    local pwm = rc:get_pwm(estop_channel)
+    if pwm == nil then
+        mm_hv_estop_active = false
+        return false
+    end
+
+    local active = pwm >= common.ESTOP_PWM_THRESHOLD
+    mm_hv_estop_active = active
+    return active
+end
+
 local function emergency_shutdown(reason)
+    local shutdown_ms = millis():toint()
     mm_hv_command_enable = false
 
     set_safe_state()
@@ -665,7 +699,7 @@ local function emergency_shutdown(reason)
 
     local prev_state = hv_state
     hv_state = common.STATE_FAULTED
-    state_entry_ms = millis():toint()
+    state_entry_ms = shutdown_ms
 
     mm_hv_state = hv_state
     mm_hv_state_name = state_name(hv_state)
@@ -673,8 +707,8 @@ local function emergency_shutdown(reason)
     mm_hv_last_state_change_ms = state_entry_ms
 
     gcs:send_text(common.MAV_SEVERITY.CRITICAL,
-        string.format("HV: EMERGENCY SHUTDOWN, %s to FAULTED (%s)",
-            state_name(prev_state), reason))
+        string.format("HV: EMERGENCY SHUTDOWN @%dms, %s to FAULTED (%s)",
+            shutdown_ms, state_name(prev_state), reason))
 end
 
 local function check_hvil_break()
@@ -854,6 +888,11 @@ local function handle_energized()
         return
     end
 
+    if mm_hv_single_rotor_fault then
+        emergency_shutdown("SINGLE_ROTOR_FAILURE")
+        return
+    end
+
     check_redlines()
     if hv_state == common.STATE_FAULTED then
         return
@@ -882,6 +921,11 @@ local function handle_armed()
     local has_fault, fault_reason = check_dti_fault_non_precharge()
     if has_fault then
         emergency_shutdown(fault_reason)
+        return
+    end
+
+    if mm_hv_single_rotor_fault then
+        emergency_shutdown("SINGLE_ROTOR_FAILURE")
         return
     end
 
@@ -930,6 +974,13 @@ function update()
         return update, common.HVIL_POLL_RATE_MS
     end
 
+    if hv_state ~= common.STATE_DE_ENERGIZED and
+       hv_state ~= common.STATE_FAULTED and
+       check_estop_active() then
+        emergency_shutdown("ESTOP")
+        return update, common.HVIL_POLL_RATE_MS
+    end
+
     if hv_state == common.STATE_DE_ENERGIZED then
         handle_de_energized()
     elseif hv_state == common.STATE_PRECHARGING then
@@ -953,6 +1004,7 @@ local function init()
 
     local gpio_ok = init_gpio()
     local hvil_ok = init_hvil_adc()
+    local estop_ok = find_estop_channel()
 
     if gpio_ok and hvil_ok then
         hv_state = common.STATE_DE_ENERGIZED
@@ -966,9 +1018,18 @@ local function init()
         local healthy, status = is_hvil_healthy()
         local hvil_msg = healthy and "HVIL OK" or status
 
+        local estop_msg = ""
+        if estop_ok then
+            estop_msg = string.format(", E-stop CH%d", estop_channel)
+        else
+            estop_msg = ", E-stop not configured"
+            gcs:send_text(common.MAV_SEVERITY.NOTICE,
+                "HV: No RC channel configured with RCx_OPTION=31 for E-stop")
+        end
+
         gcs:send_text(common.MAV_SEVERITY.INFO,
-            string.format("HV: Initialized, state DE_ENERGIZED, %s (%.2fV)",
-                hvil_msg, mm_hv_hvil_voltage))
+            string.format("HV: Initialized, state DE_ENERGIZED, %s (%.2fV)%s",
+                hvil_msg, mm_hv_hvil_voltage, estop_msg))
 
         return update, common.HVIL_POLL_RATE_MS
     end

@@ -71,6 +71,10 @@ M.DESYNC_HARD_RPM = 11.3
 -- Spin up suppression time after arming (milliseconds)
 M.SPINUP_SUPPRESS_MS = 5000
 
+-- E-stop RC channel configuration
+M.RC_OPTION_MOTOR_ESTOP = 31       -- RC_OPTION value for Motor Emergency Stop
+M.ESTOP_PWM_THRESHOLD = 1700       -- PWM value above which E-stop is considered active
+
 -- Flight mode numbers for mode transitions
 M.MODE_STABILIZE = 0
 M.MODE_ALT_HOLD = 2
