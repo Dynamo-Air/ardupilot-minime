@@ -97,6 +97,9 @@ local overspeed_start_ms_fwd = nil
 local overspeed_start_ms_aft = nil
 local coolant_sensor_warned = false
 
+local single_rotor_rpm_start_ms_fwd = nil
+local single_rotor_rpm_start_ms_aft = nil
+
 local SEVERITY_ORDER = { caution = 1, warning = 2, hard = 3 }
 
 local STATE_NAMES = {
@@ -286,6 +289,100 @@ local function check_uncommanded_overspeed()
     end
 
     return false
+end
+
+local function check_single_rotor_failure()
+    local now_ms = millis():toint()
+
+    local cmd_fwd = mm_dti_command_rpm_fwd or 0
+    local cmd_aft = mm_dti_command_rpm_aft or 0
+    local actual_fwd = mm_dti_actual_rpm_fwd or 0
+    local actual_aft = mm_dti_actual_rpm_aft or 0
+    local current_fwd = mm_dti_current_dc_fwd or 0
+    local current_aft = mm_dti_current_dc_aft or 0
+    local fault_fwd = mm_dti_fault_fwd or 0
+    local fault_aft = mm_dti_fault_aft or 0
+    local heartbeat_fwd = mm_dti_heartbeat_fwd or 0
+    local heartbeat_aft = mm_dti_heartbeat_aft or 0
+
+    if cmd_fwd <= 0 and cmd_aft <= 0 then
+        single_rotor_rpm_start_ms_fwd = nil
+        single_rotor_rpm_start_ms_aft = nil
+        mm_hv_single_rotor_fault = false
+        return nil
+    end
+
+    if fault_fwd ~= 0 and fault_aft == 0 then
+        mm_hv_single_rotor_fault = true
+        return "DTI_FAULT_FWD_ONLY"
+    end
+    if fault_aft ~= 0 and fault_fwd == 0 then
+        mm_hv_single_rotor_fault = true
+        return "DTI_FAULT_AFT_ONLY"
+    end
+
+    if current_fwd < common.SINGLE_ROTOR_CURRENT_NEAR_ZERO and
+       current_aft > common.SINGLE_ROTOR_CURRENT_NORMAL then
+        mm_hv_single_rotor_fault = true
+        return "CURRENT_ANOMALY_FWD"
+    end
+    if current_aft < common.SINGLE_ROTOR_CURRENT_NEAR_ZERO and
+       current_fwd > common.SINGLE_ROTOR_CURRENT_NORMAL then
+        mm_hv_single_rotor_fault = true
+        return "CURRENT_ANOMALY_AFT"
+    end
+
+    local fwd_heartbeat_age = now_ms - heartbeat_fwd
+    local aft_heartbeat_age = now_ms - heartbeat_aft
+    if fwd_heartbeat_age > common.SINGLE_ROTOR_HEARTBEAT_TIMEOUT_MS and
+       aft_heartbeat_age < common.SINGLE_ROTOR_HEARTBEAT_TIMEOUT_MS then
+        mm_hv_single_rotor_fault = true
+        return "HEARTBEAT_LOSS_FWD"
+    end
+    if aft_heartbeat_age > common.SINGLE_ROTOR_HEARTBEAT_TIMEOUT_MS and
+       fwd_heartbeat_age < common.SINGLE_ROTOR_HEARTBEAT_TIMEOUT_MS then
+        mm_hv_single_rotor_fault = true
+        return "HEARTBEAT_LOSS_AFT"
+    end
+
+    if cmd_fwd > 0 then
+        local drop_threshold = cmd_fwd * (1 - common.SINGLE_ROTOR_RPM_DROP_PCT)
+        local maintain_threshold = cmd_aft * (1 - common.SINGLE_ROTOR_RPM_MAINTAIN_PCT)
+
+        if actual_fwd < drop_threshold and actual_aft > maintain_threshold then
+            if single_rotor_rpm_start_ms_fwd == nil then
+                single_rotor_rpm_start_ms_fwd = now_ms
+            elseif now_ms - single_rotor_rpm_start_ms_fwd >= common.SINGLE_ROTOR_DETECT_DURATION_MS then
+                mm_hv_single_rotor_fault = true
+                return "RPM_LOSS_FWD"
+            end
+        else
+            single_rotor_rpm_start_ms_fwd = nil
+        end
+    else
+        single_rotor_rpm_start_ms_fwd = nil
+    end
+
+    if cmd_aft > 0 then
+        local drop_threshold = cmd_aft * (1 - common.SINGLE_ROTOR_RPM_DROP_PCT)
+        local maintain_threshold = cmd_fwd * (1 - common.SINGLE_ROTOR_RPM_MAINTAIN_PCT)
+
+        if actual_aft < drop_threshold and actual_fwd > maintain_threshold then
+            if single_rotor_rpm_start_ms_aft == nil then
+                single_rotor_rpm_start_ms_aft = now_ms
+            elseif now_ms - single_rotor_rpm_start_ms_aft >= common.SINGLE_ROTOR_DETECT_DURATION_MS then
+                mm_hv_single_rotor_fault = true
+                return "RPM_LOSS_AFT"
+            end
+        else
+            single_rotor_rpm_start_ms_aft = nil
+        end
+    else
+        single_rotor_rpm_start_ms_aft = nil
+    end
+
+    mm_hv_single_rotor_fault = false
+    return nil
 end
 
 local function check_redlines()
@@ -615,11 +712,14 @@ local function reset_redline_state()
     redline_last_alert_ms = {}
     overspeed_start_ms_fwd = nil
     overspeed_start_ms_aft = nil
+    single_rotor_rpm_start_ms_fwd = nil
+    single_rotor_rpm_start_ms_aft = nil
     mm_hv_redline_active = false
     mm_hv_redline_level = "normal"
     mm_hv_redline_param = ""
     mm_hv_derate_pct = 100
     mm_hv_saturate_rpm = false
+    mm_hv_single_rotor_fault = false
 end
 
 local function init_gpio()
@@ -888,8 +988,9 @@ local function handle_energized()
         return
     end
 
-    if mm_hv_single_rotor_fault then
-        emergency_shutdown("SINGLE_ROTOR_FAILURE")
+    local single_rotor_reason = check_single_rotor_failure()
+    if single_rotor_reason then
+        emergency_shutdown(single_rotor_reason)
         return
     end
 
@@ -924,8 +1025,9 @@ local function handle_armed()
         return
     end
 
-    if mm_hv_single_rotor_fault then
-        emergency_shutdown("SINGLE_ROTOR_FAILURE")
+    local single_rotor_reason = check_single_rotor_failure()
+    if single_rotor_reason then
+        emergency_shutdown(single_rotor_reason)
         return
     end
 

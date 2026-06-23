@@ -91,6 +91,14 @@ M.OVERSPEED_THRESHOLD_PCT = 0.05
 M.OVERSPEED_DURATION_MS = 500
 M.REDLINE_ALERT_RATE_LIMIT_MS = 5000
 
+-- Single rotor failure detection constants
+M.SINGLE_ROTOR_RPM_DROP_PCT = 0.50          -- 50% RPM drop threshold
+M.SINGLE_ROTOR_RPM_MAINTAIN_PCT = 0.10      -- Other rotor must be within 10% of commanded
+M.SINGLE_ROTOR_DETECT_DURATION_MS = 100     -- 100ms sustained detection for RPM loss
+M.SINGLE_ROTOR_CURRENT_NEAR_ZERO = 5.0      -- Current below 5A considered near zero
+M.SINGLE_ROTOR_CURRENT_NORMAL = 20.0        -- Current above 20A considered normal load
+M.SINGLE_ROTOR_HEARTBEAT_TIMEOUT_MS = 200   -- Heartbeat loss threshold for one rotor
+
 -- Redline thresholds: motor winding temperature (Celsius)
 M.REDLINE_MOTOR_WINDING = {
     caution = 80,
