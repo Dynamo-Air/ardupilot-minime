@@ -128,6 +128,39 @@ M.PHASE_SYNC_TOLERANCE_DEG = 1.0      -- Phase matching tolerance for synchroniz
 M.PHASE_OFFSET_IN_PHASE = 0.0         -- 0 degree offset (blades aligned)
 M.PHASE_OFFSET_OUT_PHASE = 60.0       -- 60 degree offset (maximized out of phase)
 
+-- Synchronized rotor mode states (OBJ-MOD-4)
+M.SYNC_IDLE = 0                       -- Both rotors at matched RPM, waiting for command
+M.SYNC_RAMP = 1                       -- Ramping to synchronized 100% RPM
+M.SYNC_PHASE_0 = 2                    -- Synchronized at 0 degree offset
+M.SYNC_PHASE_60 = 3                   -- Synchronized at 60 degree offset
+M.SYNC_FAULT = 4                      -- Synchronization lost
+
+-- Synchronized mode RPM parameters
+M.SYNC_TARGET_RPM = 1131.7            -- Target rotor RPM for synchronized mode
+M.SYNC_RPM_TOLERANCE = 1.13           -- 0.1% of hover RPM matching tolerance
+M.SYNC_RAMP_RATE_RPM_S = 100.0        -- RPM per second ramp rate
+M.SYNC_SETTLE_TIME_MS = 2000          -- Time to stabilize at target RPM
+
+-- Synchronized mode phase control parameters
+M.SYNC_PHASE_K_P = 0.3                -- Proportional gain for phase adjustment (RPM per degree)
+M.SYNC_PHASE_MAX_RPM_ADJ = 5.0        -- Max RPM adjustment for phase control
+M.SYNC_PHASE_TOLERANCE_DEG = 2.0      -- Phase offset tolerance in degrees
+
+-- Synchronized mode fault detection
+M.SYNC_FAULT_RPM_DIFF_PCT = 0.02      -- 2% RPM differential triggers fault
+M.SYNC_FAULT_RPM_DIFF_MS = 500        -- Duration before fault declared
+M.SYNC_FAULT_PHASE_ERR_DEG = 10.0     -- Phase error threshold for fault
+M.SYNC_FAULT_PHASE_ERR_MS = 1000      -- Phase error duration before fault
+
+-- State name lookup for logging
+M.SYNC_STATE_NAMES = {
+    [0] = "SYNC_IDLE",
+    [1] = "SYNC_RAMP",
+    [2] = "SYNC_PHASE_0",
+    [3] = "SYNC_PHASE_60",
+    [4] = "SYNC_FAULT"
+}
+
 -- Redline thresholds: motor winding temperature (Celsius)
 M.REDLINE_MOTOR_WINDING = {
     caution = 80,
@@ -440,6 +473,32 @@ return M
        mm_tel_desync_state (desync alert level)
        mm_dti_actual_rpm_fwd, mm_dti_actual_rpm_aft (raw RPM values)
        mm_hv_state (current HV state for mode lockout checks)
+
+   Test Modes Outputs (mm_test_ prefix, updated at 100 Hz):
+     mm_test_lockout_active     boolean  True if any lockout condition prevents test mode
+     mm_test_lockout_reason     string   Human readable lockout reason or empty
+     mm_test_rsc_mode_ok        boolean  True if H_RSC_MODE = 3
+     mm_test_flight_mode_ok     boolean  True if flight mode allows test modes
+     mm_test_altitude_ok        boolean  True if altitude < 1m AGL
+     mm_test_arm_flight_ok      boolean  True if not armed or not flying
+     mm_test_state              integer  Current sync state (0=IDLE,1=RAMP,2=PHASE_0,3=PHASE_60,4=FAULT)
+     mm_test_state_name         string   Human readable state name
+     mm_test_active             boolean  True when test mode is controlling RPM
+     mm_test_cmd_rpm_fwd        number   Commanded RPM for forward rotor (nil when inactive)
+     mm_test_cmd_rpm_aft        number   Commanded RPM for aft rotor (nil when inactive)
+     mm_test_phase_target       number   Target phase offset (0 or 60 degrees)
+     mm_test_phase_error        number   Current phase error in degrees
+     mm_test_rpm_fwd            number   Current forward rotor RPM
+     mm_test_rpm_aft            number   Current aft rotor RPM
+     mm_test_sync_achieved      boolean  True when RPM and phase targets met
+     mm_test_gcs_override       boolean  GCS override active for ground testing
+
+   Test Modes Command Inputs (set externally to control synchronized mode):
+     mm_test_cmd_start          boolean  Set true to start sync mode from SYNC_IDLE
+     mm_test_cmd_stop           boolean  Set true to stop and return to SYNC_IDLE
+     mm_test_cmd_phase_0        boolean  Set true to change to 0 degree offset
+     mm_test_cmd_phase_60       boolean  Set true to change to 60 degree offset
+     mm_test_cmd_reset          boolean  Set true to reset from SYNC_FAULT to SYNC_IDLE
 
    Encoder Interface (mm_enc_ prefix, updated at 100 Hz):
      mm_enc_position_fwd    number   Forward rotor position in degrees (0-360)

@@ -359,21 +359,38 @@ function update()
 
     local hv_cmd_enabled = mm_hv_command_enable or false
     if arming:is_armed() and hv_cmd_enabled then
-        local rsc_output = SRV_Channels:get_output_scaled(K_HELIRSC)
-        if rsc_output then
-            local erpm = math.floor((rsc_output / 1000.0) * common.ERPM_HOVER + 0.5)
-            if erpm < 0 then
-                erpm = 0
-            end
+        local test_active = mm_test_active or false
+        local test_fwd = mm_test_cmd_rpm_fwd
+        local test_aft = mm_test_cmd_rpm_aft
 
-            send_erpm_command(CMD_ID_FWD, erpm)
-            send_erpm_command(CMD_ID_AFT, erpm)
+        if test_active and test_fwd and test_aft then
+            local erpm_fwd = common.erpm_from_rpm(test_fwd)
+            local erpm_aft = common.erpm_from_rpm(test_aft)
 
-            local rotor_rpm = common.rpm_from_erpm(erpm)
-            mm_dti_command_rpm_fwd = rotor_rpm
-            mm_dti_command_rpm_aft = rotor_rpm
+            send_erpm_command(CMD_ID_FWD, erpm_fwd)
+            send_erpm_command(CMD_ID_AFT, erpm_aft)
+
+            mm_dti_command_rpm_fwd = test_fwd
+            mm_dti_command_rpm_aft = test_aft
 
             last_cmd_ms = millis():toint()
+        else
+            local rsc_output = SRV_Channels:get_output_scaled(K_HELIRSC)
+            if rsc_output then
+                local erpm = math.floor((rsc_output / 1000.0) * common.ERPM_HOVER + 0.5)
+                if erpm < 0 then
+                    erpm = 0
+                end
+
+                send_erpm_command(CMD_ID_FWD, erpm)
+                send_erpm_command(CMD_ID_AFT, erpm)
+
+                local rotor_rpm = common.rpm_from_erpm(erpm)
+                mm_dti_command_rpm_fwd = rotor_rpm
+                mm_dti_command_rpm_aft = rotor_rpm
+
+                last_cmd_ms = millis():toint()
+            end
         end
     else
         mm_dti_command_rpm_fwd = 0
