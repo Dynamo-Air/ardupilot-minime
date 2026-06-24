@@ -84,6 +84,14 @@ M.MODE_ALT_HOLD = 2
 M.MODE_RTL = 6
 M.MODE_LAND = 9
 
+-- H_RSC_MODE constants for governor/throttle control
+M.RSC_MODE_ESC_GOVERNOR = 2     -- Baseline flight operations
+M.RSC_MODE_THROTTLE_CURVE = 3   -- Required for test modes (OBJ-MOD-4, OBJ-MOD-5)
+
+-- Test mode lockout constants
+M.TEST_MODE_MAX_ALTITUDE_M = 1.0      -- Test modes locked above 1m AGL
+M.TEST_MODE_LOCKOUT_ALERT_MS = 5000   -- Rate limit for lockout alerts
+
 -- Landing detection constants
 M.LANDING_RPM_THRESHOLD = 100           -- Rotors below this RPM considered stopped
 M.LANDING_DETECT_DURATION_MS = 2000     -- Duration to confirm landing complete (2 seconds)
