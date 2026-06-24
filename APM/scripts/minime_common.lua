@@ -107,6 +107,19 @@ M.SINGLE_ROTOR_CURRENT_NEAR_ZERO = 5.0      -- Current below 5A considered near 
 M.SINGLE_ROTOR_CURRENT_NORMAL = 20.0        -- Current above 20A considered normal load
 M.SINGLE_ROTOR_HEARTBEAT_TIMEOUT_MS = 200   -- Heartbeat loss threshold for one rotor
 
+-- Encoder constants (RLS RM44SI via DTI HV550)
+M.ENC_PACKET_ID = 0x04                -- DTI packet ID for encoder data (verify during bench test)
+M.ENC_COUNTS_PER_REV = 16384          -- RLS RM44SI 14-bit resolution
+M.ENC_DEGREES_PER_COUNT = 360.0 / 16384  -- 0.02197 degrees per count
+M.ENC_BLADES_PER_ROTOR = 3            -- 3-blade rotor symmetry
+M.ENC_BLADE_SPACING_DEG = 120.0       -- 360 / 3 blades
+M.ENC_TIMEOUT_MS = 100                -- Encoder data staleness threshold
+
+-- Phase synchronization constants for test modes
+M.PHASE_SYNC_TOLERANCE_DEG = 1.0      -- Phase matching tolerance for synchronized mode
+M.PHASE_OFFSET_IN_PHASE = 0.0         -- 0 degree offset (blades aligned)
+M.PHASE_OFFSET_OUT_PHASE = 60.0       -- 60 degree offset (maximized out of phase)
+
 -- Redline thresholds: motor winding temperature (Celsius)
 M.REDLINE_MOTOR_WINDING = {
     caution = 80,
@@ -305,6 +318,41 @@ function M.check_redline(value, redline, invert)
     return nil
 end
 
+--[[
+   Calculate rotor phase from encoder position using 3-blade symmetry
+   @param position_deg Encoder position in degrees (0-360)
+   @return Phase within blade symmetry (0-120 degrees)
+]]--
+function M.calculate_blade_phase(position_deg)
+    local normalized = position_deg % 360.0
+    return normalized % M.ENC_BLADE_SPACING_DEG
+end
+
+--[[
+   Calculate cross-rotor phase difference
+   @param phase_fwd Forward rotor phase (0-120)
+   @param phase_aft Aft rotor phase (0-120)
+   @return Phase difference in degrees (-60 to +60)
+]]--
+function M.calculate_phase_diff(phase_fwd, phase_aft)
+    local diff = phase_fwd - phase_aft
+    if diff > 60.0 then
+        diff = diff - 120.0
+    elseif diff < -60.0 then
+        diff = diff + 120.0
+    end
+    return diff
+end
+
+--[[
+   Convert raw encoder counts to degrees
+   @param counts Raw encoder counts (0 to ENC_COUNTS_PER_REV-1)
+   @return Position in degrees (0-360)
+]]--
+function M.encoder_counts_to_deg(counts)
+    return counts * M.ENC_DEGREES_PER_COUNT
+end
+
 return M
 
 --[[
@@ -384,4 +432,16 @@ return M
        mm_tel_desync_state (desync alert level)
        mm_dti_actual_rpm_fwd, mm_dti_actual_rpm_aft (raw RPM values)
        mm_hv_state (current HV state for mode lockout checks)
+
+   Encoder Interface (mm_enc_ prefix, updated at 100 Hz):
+     mm_enc_position_fwd    number   Forward rotor position in degrees (0-360)
+     mm_enc_position_aft    number   Aft rotor position in degrees (0-360)
+     mm_enc_phase_fwd       number   Forward rotor phase (0-120, blade symmetry)
+     mm_enc_phase_aft       number   Aft rotor phase (0-120, blade symmetry)
+     mm_enc_phase_diff      number   Cross-rotor phase difference (-60 to +60)
+     mm_enc_heartbeat_fwd   integer  Forward encoder last update timestamp in ms
+     mm_enc_heartbeat_aft   integer  Aft encoder last update timestamp in ms
+     mm_enc_valid_fwd       boolean  Forward encoder data valid and fresh
+     mm_enc_valid_aft       boolean  Aft encoder data valid and fresh
+     mm_enc_sync_error      number   Absolute phase synchronization error in degrees
 ]]--

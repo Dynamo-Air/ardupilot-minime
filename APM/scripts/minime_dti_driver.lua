@@ -22,6 +22,14 @@
      mm_dti_temp_sensor_fault_fwd, mm_dti_temp_sensor_fault_aft   Sensor fault flags
      mm_dti_fault_active                                True if any DTI fault is active
 
+   Encoder Outputs (mm_enc_ prefix, updated at 100 Hz):
+     mm_enc_position_fwd, mm_enc_position_aft           Rotor position in degrees (0-360)
+     mm_enc_phase_fwd, mm_enc_phase_aft                 Rotor phase within blade symmetry (0-120)
+     mm_enc_phase_diff                                  Cross-rotor phase difference (-60 to +60)
+     mm_enc_heartbeat_fwd, mm_enc_heartbeat_aft         Last encoder timestamp in ms
+     mm_enc_valid_fwd, mm_enc_valid_aft                 Encoder data valid and fresh
+     mm_enc_sync_error                                  Absolute phase sync error in degrees
+
    Inputs (read from other scripts):
      mm_hv_command_enable      HV control flag enabling CAN command transmission
 ]]--
@@ -66,6 +74,10 @@ local function parse_u16_le(b0, b1)
     return b0 + b1 * 256
 end
 
+local function parse_u32_le(b0, b1, b2, b3)
+    return b0 + b1 * 256 + b2 * 65536 + b3 * 16777216
+end
+
 local TEMP_SENSOR_MIN = -40
 local TEMP_SENSOR_MAX = 150
 
@@ -82,7 +94,11 @@ local telem_fwd = {
     id = 0,
     iq = 0,
     last_rx_ms = 0,
-    temp_sensor_fault = false
+    temp_sensor_fault = false,
+    enc_position_raw = 0,
+    enc_position_deg = 0,
+    enc_last_rx_ms = 0,
+    enc_valid = false
 }
 
 local telem_aft = {
@@ -98,7 +114,11 @@ local telem_aft = {
     id = 0,
     iq = 0,
     last_rx_ms = 0,
-    temp_sensor_fault = false
+    temp_sensor_fault = false,
+    enc_position_raw = 0,
+    enc_position_deg = 0,
+    enc_last_rx_ms = 0,
+    enc_valid = false
 }
 
 local cmd_enabled = false
@@ -167,6 +187,21 @@ local function parse_packet_0x03(frame, telem)
     telem.iq = parse_i16_le(frame:data(2), frame:data(3)) / 100.0
 end
 
+local function parse_packet_enc(frame, telem)
+    local raw_position = parse_u32_le(frame:data(0), frame:data(1),
+                                       frame:data(2), frame:data(3))
+    telem.enc_position_raw = raw_position
+
+    if raw_position < common.ENC_COUNTS_PER_REV then
+        telem.enc_position_deg = common.encoder_counts_to_deg(raw_position)
+    else
+        telem.enc_position_deg = raw_position / 1000.0
+    end
+
+    telem.enc_last_rx_ms = millis():toint()
+    telem.enc_valid = true
+end
+
 local function parse_telemetry_frame(frame)
     local id = frame:id()
     local node_id = id % 256
@@ -192,6 +227,8 @@ local function parse_telemetry_frame(frame)
         parse_packet_0x02(frame, telem, rotor_name)
     elseif packet_id == 0x03 then
         parse_packet_0x03(frame, telem)
+    elseif packet_id == common.ENC_PACKET_ID then
+        parse_packet_enc(frame, telem)
     end
 
     telem.last_rx_ms = millis():toint()
@@ -255,6 +292,17 @@ mm_dti_temp_sensor_fault_fwd = false
 mm_dti_temp_sensor_fault_aft = false
 mm_dti_fault_active = false
 
+mm_enc_position_fwd = 0
+mm_enc_position_aft = 0
+mm_enc_phase_fwd = 0
+mm_enc_phase_aft = 0
+mm_enc_phase_diff = 0
+mm_enc_heartbeat_fwd = 0
+mm_enc_heartbeat_aft = 0
+mm_enc_valid_fwd = false
+mm_enc_valid_aft = false
+mm_enc_sync_error = 0
+
 local update
 
 function update()
@@ -283,6 +331,29 @@ function update()
     mm_dti_temp_sensor_fault_fwd = telem_fwd.temp_sensor_fault
     mm_dti_temp_sensor_fault_aft = telem_aft.temp_sensor_fault
     mm_dti_fault_active = (telem_fwd.fault_code ~= 0) or (telem_aft.fault_code ~= 0)
+
+    local now_ms = millis():toint()
+
+    local enc_fwd_fresh = (now_ms - telem_fwd.enc_last_rx_ms) < common.ENC_TIMEOUT_MS
+    mm_enc_valid_fwd = telem_fwd.enc_valid and enc_fwd_fresh
+    if mm_enc_valid_fwd then
+        mm_enc_position_fwd = telem_fwd.enc_position_deg
+        mm_enc_phase_fwd = common.calculate_blade_phase(telem_fwd.enc_position_deg)
+        mm_enc_heartbeat_fwd = telem_fwd.enc_last_rx_ms
+    end
+
+    local enc_aft_fresh = (now_ms - telem_aft.enc_last_rx_ms) < common.ENC_TIMEOUT_MS
+    mm_enc_valid_aft = telem_aft.enc_valid and enc_aft_fresh
+    if mm_enc_valid_aft then
+        mm_enc_position_aft = telem_aft.enc_position_deg
+        mm_enc_phase_aft = common.calculate_blade_phase(telem_aft.enc_position_deg)
+        mm_enc_heartbeat_aft = telem_aft.enc_last_rx_ms
+    end
+
+    if mm_enc_valid_fwd and mm_enc_valid_aft then
+        mm_enc_phase_diff = common.calculate_phase_diff(mm_enc_phase_fwd, mm_enc_phase_aft)
+        mm_enc_sync_error = math.abs(mm_enc_phase_diff)
+    end
 
     update_esc_telemetry()
 
