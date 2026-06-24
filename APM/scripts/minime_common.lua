@@ -171,6 +171,22 @@ M.DELTA_ABORT_ACCEL_G = 2.0           -- Abort if vibration exceeds 2g
 M.DELTA_ABORT_DURATION_MS = 500       -- Duration before abort triggered
 M.DELTA_ABORT_SETTLE_MS = 1000        -- Settle time after step change before monitoring
 
+-- RPM avoidance band constants
+M.AVOID_BAND_MAX_COUNT = 4            -- Maximum number of configurable bands
+M.AVOID_BAND_CONFIG_PATH = "APM/config/rpm_bands.txt"  -- SD card configuration file
+M.AVOID_BAND_CAUTION_PCT = 0.02       -- 2% caution zone from band edge
+M.AVOID_BAND_LOG_RATE_MS = 100        -- Rate limit for band interaction logging
+
+-- Avoidance band violation states
+M.AVOID_NORMAL = 0                    -- RPM safely outside all bands
+M.AVOID_CAUTION = 1                   -- RPM within 2% of band edge
+M.AVOID_WARNING = 2                   -- RPM at band edge
+M.AVOID_HARD = 3                      -- RPM inside band (requires action)
+
+-- Avoidance band type constants
+M.AVOID_TYPE_ABSOLUTE = 1             -- Band defines rotor RPM range to avoid
+M.AVOID_TYPE_DELTA = 2                -- Band defines differential RPM range to avoid
+
 -- State name lookup for logging
 M.SYNC_STATE_NAMES = {
     [0] = "SYNC_IDLE",

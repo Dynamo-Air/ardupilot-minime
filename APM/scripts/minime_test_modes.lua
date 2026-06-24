@@ -80,6 +80,15 @@
      mm_test_cmd_delta_next     Set true to advance to next delta step
      mm_test_cmd_delta_reverse  Set true to reverse delta direction (+/- to -/+)
      mm_test_cmd_delta_stop     Set true to stop delta sweep and return to sync mode
+
+   RPM Avoidance Band Outputs (mm_test_ prefix):
+     mm_test_avoid_bands_loaded    integer  Number of avoidance bands loaded (0 if none)
+     mm_test_avoid_violation_level integer  Current worst violation (0=normal,1=caution,2=warning,3=hard)
+     mm_test_avoid_violation_band  integer  Index of band causing worst violation (0 if none)
+     mm_test_avoid_active          boolean  True if enforcement active and bands loaded
+
+   RPM Avoidance Band Commands:
+     mm_test_cmd_reload_bands      Set true to reload bands from config file
 ]]--
 
 local common = require("minime_common")
@@ -148,6 +157,20 @@ mm_test_cmd_delta_start = false
 mm_test_cmd_delta_next = false
 mm_test_cmd_delta_reverse = false
 mm_test_cmd_delta_stop = false
+
+-- RPM avoidance band outputs
+mm_test_avoid_bands_loaded = 0
+mm_test_avoid_violation_level = common.AVOID_NORMAL
+mm_test_avoid_violation_band = 0
+mm_test_avoid_active = false
+
+-- RPM avoidance band command input
+mm_test_cmd_reload_bands = false
+
+-- Local avoidance band storage
+local avoidance_bands = {}
+local avoid_last_log_ms = 0
+local avoid_last_warning_ms = 0
 
 --[[
    Check H_RSC_MODE parameter
@@ -343,6 +366,272 @@ local function clear_command_flags()
     mm_test_cmd_delta_next = false
     mm_test_cmd_delta_reverse = false
     mm_test_cmd_delta_stop = false
+    mm_test_cmd_reload_bands = false
+end
+
+--[[
+   Load avoidance bands from SD card configuration file
+   File format: CSV with columns MIN_RPM,MAX_RPM,TYPE,DESCRIPTION
+   Lines starting with # are comments and are skipped
+   @return number of bands loaded
+]]--
+local function load_avoidance_bands()
+    avoidance_bands = {}
+    local file = io.open(common.AVOID_BAND_CONFIG_PATH, "r")
+
+    if not file then
+        gcs:send_text(common.MAV_SEVERITY.INFO,
+            string.format("%s: No avoidance band file found (passthrough mode)", SCRIPT_NAME))
+        mm_test_avoid_bands_loaded = 0
+        mm_test_avoid_active = false
+        return 0
+    end
+
+    local line_num = 0
+    local bands_loaded = 0
+
+    while bands_loaded < common.AVOID_BAND_MAX_COUNT do
+        local line = file:read("l")
+        if not line then
+            break
+        end
+        line_num = line_num + 1
+
+        local trimmed = line:match("^%s*(.-)%s*$")
+        if trimmed == "" or trimmed:sub(1, 1) == "#" then
+            goto continue
+        end
+
+        local min_str, max_str, type_str, desc = trimmed:match("([^,]+),([^,]+),([^,]+),?(.*)")
+        if not min_str or not max_str or not type_str then
+            gcs:send_text(common.MAV_SEVERITY.WARNING,
+                string.format("%s: Malformed band at line %d, skipping", SCRIPT_NAME, line_num))
+            goto continue
+        end
+
+        local min_rpm = tonumber(min_str)
+        local max_rpm = tonumber(max_str)
+        type_str = type_str:match("^%s*(.-)%s*$")
+
+        if not min_rpm or not max_rpm then
+            gcs:send_text(common.MAV_SEVERITY.WARNING,
+                string.format("%s: Invalid RPM values at line %d, skipping", SCRIPT_NAME, line_num))
+            goto continue
+        end
+
+        if min_rpm >= max_rpm then
+            gcs:send_text(common.MAV_SEVERITY.WARNING,
+                string.format("%s: MIN >= MAX at line %d, skipping", SCRIPT_NAME, line_num))
+            goto continue
+        end
+
+        local band_type = common.AVOID_TYPE_ABSOLUTE
+        if type_str == "delta" then
+            band_type = common.AVOID_TYPE_DELTA
+        elseif type_str ~= "absolute" then
+            gcs:send_text(common.MAV_SEVERITY.WARNING,
+                string.format("%s: Unknown type '%s' at line %d, using absolute", SCRIPT_NAME, type_str, line_num))
+        end
+
+        bands_loaded = bands_loaded + 1
+        avoidance_bands[bands_loaded] = {
+            min_rpm = min_rpm,
+            max_rpm = max_rpm,
+            band_type = band_type,
+            description = desc or ""
+        }
+
+        ::continue::
+    end
+
+    file:close()
+
+    mm_test_avoid_bands_loaded = bands_loaded
+    mm_test_avoid_active = (bands_loaded > 0)
+
+    if bands_loaded > 0 then
+        gcs:send_text(common.MAV_SEVERITY.INFO,
+            string.format("%s: Loaded %d avoidance band(s)", SCRIPT_NAME, bands_loaded))
+        for i, band in ipairs(avoidance_bands) do
+            local type_name = "absolute"
+            if band.band_type == common.AVOID_TYPE_DELTA then
+                type_name = "delta"
+            end
+            gcs:send_text(common.MAV_SEVERITY.INFO,
+                string.format("%s: Band %d: %.1f to %.1f RPM (%s)", SCRIPT_NAME, i, band.min_rpm, band.max_rpm, type_name))
+        end
+    else
+        gcs:send_text(common.MAV_SEVERITY.INFO,
+            string.format("%s: Loaded 0 avoidance bands (passthrough mode)", SCRIPT_NAME))
+    end
+
+    return bands_loaded
+end
+
+--[[
+   Check if an RPM value violates an absolute band
+   @param rpm RPM value to check
+   @param band Band table with min_rpm and max_rpm
+   @return violation level (AVOID_NORMAL, AVOID_CAUTION, AVOID_WARNING, AVOID_HARD)
+]]--
+local function check_absolute_band_violation(rpm, band)
+    local band_width = band.max_rpm - band.min_rpm
+    local caution_margin = band_width * common.AVOID_BAND_CAUTION_PCT
+
+    if rpm > band.min_rpm and rpm < band.max_rpm then
+        return common.AVOID_HARD
+    end
+
+    if rpm == band.min_rpm or rpm == band.max_rpm then
+        return common.AVOID_WARNING
+    end
+
+    if rpm >= (band.min_rpm - caution_margin) and rpm < band.min_rpm then
+        return common.AVOID_CAUTION
+    end
+
+    if rpm > band.max_rpm and rpm <= (band.max_rpm + caution_margin) then
+        return common.AVOID_CAUTION
+    end
+
+    return common.AVOID_NORMAL
+end
+
+--[[
+   Check if a delta RPM value violates a delta band
+   @param delta_rpm Absolute differential RPM between rotors
+   @param band Band table with min_rpm and max_rpm
+   @return violation level (AVOID_NORMAL, AVOID_CAUTION, AVOID_WARNING, AVOID_HARD)
+]]--
+local function check_delta_band_violation(delta_rpm, band)
+    return check_absolute_band_violation(delta_rpm, band)
+end
+
+--[[
+   Get the nearest safe RPM value outside a band
+   @param rpm Current RPM value
+   @param band Band table with min_rpm and max_rpm
+   @return Nearest safe RPM (either min_rpm or max_rpm edge)
+]]--
+local function get_nearest_safe_rpm(rpm, band)
+    local dist_to_min = math.abs(rpm - band.min_rpm)
+    local dist_to_max = math.abs(rpm - band.max_rpm)
+
+    if dist_to_min <= dist_to_max then
+        return band.min_rpm
+    else
+        return band.max_rpm
+    end
+end
+
+--[[
+   Log band interaction to onboard SD card
+   @param band_idx Index of violating band
+   @param level Violation level
+   @param rpm_fwd Forward rotor RPM
+   @param rpm_aft Aft rotor RPM
+   @param delta Delta RPM
+]]--
+local function log_band_interaction(band_idx, level, rpm_fwd, rpm_aft, delta)
+    local now = millis():toint()
+    if now - avoid_last_log_ms < common.AVOID_BAND_LOG_RATE_MS then
+        return
+    end
+    avoid_last_log_ms = now
+
+    logger:write("BAND", "Idx,Lvl,FwdR,AftR,Delta", "BBfff",
+        band_idx, level, rpm_fwd, rpm_aft, delta)
+end
+
+--[[
+   Handle band violation based on severity level
+   @param level Violation level (AVOID_CAUTION, AVOID_WARNING, AVOID_HARD)
+   @param band_idx Index of violating band
+   @param description Band description
+   @return true if hard violation requiring state change
+]]--
+local function handle_band_violation(level, band_idx, description)
+    local now = millis():toint()
+
+    if level == common.AVOID_CAUTION then
+        return false
+    end
+
+    if level == common.AVOID_WARNING then
+        if now - avoid_last_warning_ms >= common.TEST_MODE_LOCKOUT_ALERT_MS then
+            gcs:send_text(common.MAV_SEVERITY.WARNING,
+                string.format("%s: RPM near avoidance band %d", SCRIPT_NAME, band_idx))
+            avoid_last_warning_ms = now
+        end
+        return false
+    end
+
+    if level == common.AVOID_HARD then
+        gcs:send_text(common.MAV_SEVERITY.CRITICAL,
+            string.format("%s: RPM entered avoidance band %d, triggering RTL", SCRIPT_NAME, band_idx))
+        local current_mode = vehicle:get_mode()
+        if current_mode ~= common.MODE_RTL and current_mode ~= common.MODE_LAND then
+            vehicle:set_mode(common.MODE_RTL)
+        end
+        return true
+    end
+
+    return false
+end
+
+--[[
+   Enforce avoidance bands on commanded RPM values
+   @param cmd_rpm_fwd Commanded forward rotor RPM
+   @param cmd_rpm_aft Commanded aft rotor RPM
+   @return modified fwd RPM, modified aft RPM, worst violation level, violating band index
+]]--
+local function enforce_avoidance_bands(cmd_rpm_fwd, cmd_rpm_aft)
+    if mm_test_avoid_bands_loaded == 0 then
+        mm_test_avoid_violation_level = common.AVOID_NORMAL
+        mm_test_avoid_violation_band = 0
+        return cmd_rpm_fwd, cmd_rpm_aft, common.AVOID_NORMAL, 0
+    end
+
+    local worst_level = common.AVOID_NORMAL
+    local worst_band = 0
+    local delta_rpm = math.abs(cmd_rpm_fwd - cmd_rpm_aft)
+    local delta_active = mm_test_delta_active or false
+
+    local new_fwd = cmd_rpm_fwd
+    local new_aft = cmd_rpm_aft
+
+    for i, band in ipairs(avoidance_bands) do
+        local level = common.AVOID_NORMAL
+
+        if band.band_type == common.AVOID_TYPE_ABSOLUTE then
+            local fwd_level = check_absolute_band_violation(cmd_rpm_fwd, band)
+            local aft_level = check_absolute_band_violation(cmd_rpm_aft, band)
+            level = math.max(fwd_level, aft_level)
+
+            if fwd_level == common.AVOID_HARD then
+                new_fwd = get_nearest_safe_rpm(cmd_rpm_fwd, band)
+            end
+            if aft_level == common.AVOID_HARD then
+                new_aft = get_nearest_safe_rpm(cmd_rpm_aft, band)
+            end
+        elseif band.band_type == common.AVOID_TYPE_DELTA and delta_active then
+            level = check_delta_band_violation(delta_rpm, band)
+        end
+
+        if level > worst_level then
+            worst_level = level
+            worst_band = i
+        end
+    end
+
+    mm_test_avoid_violation_level = worst_level
+    mm_test_avoid_violation_band = worst_band
+
+    if worst_level > common.AVOID_NORMAL then
+        log_band_interaction(worst_band, worst_level, cmd_rpm_fwd, cmd_rpm_aft, delta_rpm)
+    end
+
+    return new_fwd, new_aft, worst_level, worst_band
 end
 
 --[[
@@ -691,8 +980,20 @@ local function handle_delta_rpm()
     local cmd_rpm_fwd = common.SYNC_TARGET_RPM + (delta_rpm_half * delta_sign)
     local cmd_rpm_aft = common.SYNC_TARGET_RPM - (delta_rpm_half * delta_sign)
 
-    mm_test_cmd_rpm_fwd = cmd_rpm_fwd
-    mm_test_cmd_rpm_aft = cmd_rpm_aft
+    local safe_fwd, safe_aft, violation_level, violation_band = enforce_avoidance_bands(cmd_rpm_fwd, cmd_rpm_aft)
+
+    if violation_level == common.AVOID_HARD then
+        if handle_band_violation(violation_level, violation_band, avoidance_bands[violation_band].description) then
+            stop_delta_sweep()
+            transition_to_state(common.SYNC_FAULT, "band violation")
+            return
+        end
+    elseif violation_level > common.AVOID_NORMAL then
+        handle_band_violation(violation_level, violation_band, avoidance_bands[violation_band].description)
+    end
+
+    mm_test_cmd_rpm_fwd = safe_fwd
+    mm_test_cmd_rpm_aft = safe_aft
 
     local fwd_rpm, aft_rpm = get_actual_rpm()
     if fwd_rpm ~= nil then
@@ -702,14 +1003,14 @@ local function handle_delta_rpm()
         mm_test_rpm_aft = aft_rpm
     end
 
-    local beat_freq = common.calculate_beat_freq(fwd_rpm or cmd_rpm_fwd, aft_rpm or cmd_rpm_aft)
+    local beat_freq = common.calculate_beat_freq(fwd_rpm or safe_fwd, aft_rpm or safe_aft)
     mm_test_beat_freq_hz = beat_freq
 
     local elapsed_s = (now - delta_step_start_ms) / 1000.0
     mm_test_step_elapsed_s = elapsed_s
 
     if now - delta_last_rpm_log_ms >= common.DELTA_RPM_LOG_RATE_MS then
-        log_delta_rpm(cmd_rpm_fwd, cmd_rpm_aft, fwd_rpm, aft_rpm, step.pct, step.rpm, beat_freq)
+        log_delta_rpm(safe_fwd, safe_aft, fwd_rpm, aft_rpm, step.pct, step.rpm, beat_freq)
         delta_last_rpm_log_ms = now
     end
 
@@ -831,8 +1132,22 @@ local function handle_sync_phase_0()
 
     local phase_adj = calculate_phase_adjustment()
 
-    mm_test_cmd_rpm_fwd = common.SYNC_TARGET_RPM
-    mm_test_cmd_rpm_aft = common.SYNC_TARGET_RPM + phase_adj
+    local cmd_fwd = common.SYNC_TARGET_RPM
+    local cmd_aft = common.SYNC_TARGET_RPM + phase_adj
+
+    local safe_fwd, safe_aft, violation_level, violation_band = enforce_avoidance_bands(cmd_fwd, cmd_aft)
+
+    if violation_level == common.AVOID_HARD then
+        if handle_band_violation(violation_level, violation_band, avoidance_bands[violation_band].description) then
+            transition_to_state(common.SYNC_FAULT, "band violation")
+            return
+        end
+    elseif violation_level > common.AVOID_NORMAL then
+        handle_band_violation(violation_level, violation_band, avoidance_bands[violation_band].description)
+    end
+
+    mm_test_cmd_rpm_fwd = safe_fwd
+    mm_test_cmd_rpm_aft = safe_aft
 
     local fwd_rpm, aft_rpm = get_actual_rpm()
     if fwd_rpm ~= nil then
@@ -876,8 +1191,22 @@ local function handle_sync_phase_60()
 
     local phase_adj = calculate_phase_adjustment()
 
-    mm_test_cmd_rpm_fwd = common.SYNC_TARGET_RPM
-    mm_test_cmd_rpm_aft = common.SYNC_TARGET_RPM + phase_adj
+    local cmd_fwd = common.SYNC_TARGET_RPM
+    local cmd_aft = common.SYNC_TARGET_RPM + phase_adj
+
+    local safe_fwd, safe_aft, violation_level, violation_band = enforce_avoidance_bands(cmd_fwd, cmd_aft)
+
+    if violation_level == common.AVOID_HARD then
+        if handle_band_violation(violation_level, violation_band, avoidance_bands[violation_band].description) then
+            transition_to_state(common.SYNC_FAULT, "band violation")
+            return
+        end
+    elseif violation_level > common.AVOID_NORMAL then
+        handle_band_violation(violation_level, violation_band, avoidance_bands[violation_band].description)
+    end
+
+    mm_test_cmd_rpm_fwd = safe_fwd
+    mm_test_cmd_rpm_aft = safe_aft
 
     local fwd_rpm, aft_rpm = get_actual_rpm()
     if fwd_rpm ~= nil then
@@ -980,6 +1309,11 @@ local function publish_state()
         gcs:send_named_float("DELTA_STP", mm_test_delta_step)
         gcs:send_named_float("BEAT_HZ", mm_test_beat_freq_hz)
     end
+
+    if mm_test_avoid_violation_level > common.AVOID_NORMAL then
+        gcs:send_named_float("AVOID_LVL", mm_test_avoid_violation_level)
+        gcs:send_named_float("AVOID_BND", mm_test_avoid_violation_band)
+    end
 end
 
 --[[
@@ -998,6 +1332,8 @@ local function init()
             string.format("%s: %s", SCRIPT_NAME, reason))
     end
 
+    load_avoidance_bands()
+
     mm_test_state = common.SYNC_IDLE
     mm_test_state_name = "SYNC_IDLE"
     last_state_change_ms = millis():toint()
@@ -1015,6 +1351,11 @@ local function update()
         if not init() then
             return update, 1000
         end
+    end
+
+    if mm_test_cmd_reload_bands then
+        load_avoidance_bands()
+        mm_test_cmd_reload_bands = false
     end
 
     check_lockout_interrupt()

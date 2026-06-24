@@ -123,6 +123,10 @@ The test modes script exports the following global variables for monitoring:
 | mm_test_delta_active | boolean | True when delta RPM sweep is active |
 | mm_test_delta_step | integer | Current delta step (1 to 4) or 0 if inactive |
 | mm_test_beat_freq_hz | number | Calculated beat frequency in Hz |
+| mm_test_avoid_bands_loaded | integer | Number of avoidance bands loaded (0 if none) |
+| mm_test_avoid_violation_level | integer | Current worst violation (0=normal, 1=caution, 2=warning, 3=hard) |
+| mm_test_avoid_violation_band | integer | Index of band causing worst violation (0 if none) |
+| mm_test_avoid_active | boolean | True if enforcement active and bands loaded |
 
 ---
 
@@ -166,6 +170,54 @@ X, Y, Z (acceleration components), Mag (magnitude)
 ### 4A.5 Abort Thresholds
 
 The delta sweep automatically aborts if vibration exceeds 2.0g for more than 500ms (after 1 second settle time following step changes). On abort, the system transitions to SYNC_FAULT state.
+
+---
+
+## 4B. RPM Avoidance Bands
+
+RPM avoidance bands define rotor RPM ranges that should be avoided due to structural resonance concerns identified during Phase G ground vibration testing.
+
+### 4B.1 Configuration File
+
+Location: `APM/config/rpm_bands.txt`
+
+Format: CSV with columns MIN_RPM, MAX_RPM, TYPE, DESCRIPTION
+
+```
+# Lines starting with # are comments
+950,980,absolute,First rotor resonance
+1050,1080,absolute,Second rotor resonance
+8,12,delta,Beat frequency resonance
+```
+
+TYPE values:
+- `absolute`: Band defines rotor RPM range to avoid (applies to individual rotor RPM)
+- `delta`: Band defines differential RPM range to avoid (applies to RPM difference between rotors)
+
+Maximum of 4 bands supported. Bands are loaded at script startup and can be reloaded by setting mm_test_cmd_reload_bands = true.
+
+### 4B.2 Violation Levels
+
+| Level | Condition | Response |
+|-------|-----------|----------|
+| NORMAL (0) | RPM outside all bands and caution zones | No action |
+| CAUTION (1) | RPM within 2% of band edge | Internal state only, no GCS alert |
+| WARNING (2) | RPM at band edge | GCS warning message (rate limited) |
+| HARD (3) | RPM inside band | GCS critical message, auto RTL, SYNC_FAULT state |
+
+### 4B.3 Enforcement Behavior
+
+When test modes are active with bands loaded:
+1. Commanded RPM is clamped to nearest safe edge if it would enter a band
+2. All band interactions are logged to SD card (BAND log message)
+3. Hard violations trigger automatic RTL mode change
+
+### 4B.4 Phase B-3 Configuration
+
+For Phase B-3 bench testing before Phase G results are available:
+- No bands are configured (empty placeholder file)
+- Software operates in passthrough mode
+- After Phase G, actual structural dynamics results populate the configuration file
 
 ---
 

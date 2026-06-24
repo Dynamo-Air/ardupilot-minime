@@ -1,0 +1,11 @@
+# RPM Avoidance Bands Configuration
+# Format: MIN_RPM,MAX_RPM,TYPE,DESCRIPTION
+# TYPE: absolute = rotor RPM range, delta = differential RPM range
+#
+# Example entries:
+# 950,980,absolute,First rotor resonance
+# 1050,1080,absolute,Second rotor resonance
+# 8,12,delta,Beat frequency resonance
+#
+# Phase B-3: No bands configured (placeholder file)
+# Phase G: Populate with actual structural dynamics results from ground vibration testing
