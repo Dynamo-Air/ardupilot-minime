@@ -19,6 +19,17 @@
      SYNC_PHASE_0: Synchronized at 0 degree phase offset
      SYNC_PHASE_60: Synchronized at 60 degree phase offset
      SYNC_FAULT: Synchronization lost, safe state
+     DELTA_RPM: Delta RPM sweep mode (OBJ-MOD-5)
+
+   Delta RPM Sweep (OBJ-MOD-5):
+     Four configurable steps with deliberate rotor speed differential:
+       Step 1: +/- 0.25% (+/- 2.8 RPM)
+       Step 2: +/- 0.5% (+/- 5.7 RPM)
+       Step 3: +/- 1.0% (+/- 11.3 RPM)
+       Step 4: +/- 2.0% (+/- 22.6 RPM)
+     Forward rotor = target + delta/2
+     Aft rotor = target - delta/2
+     Beat frequency logged for structural analysis
 
    Inter-Script Interface:
    Outputs (mm_test_ prefix):
@@ -28,7 +39,7 @@
      mm_test_flight_mode_ok     boolean  True if flight mode allows test modes
      mm_test_altitude_ok        boolean  True if altitude < 1m AGL
      mm_test_arm_flight_ok      boolean  True if not armed or not flying
-     mm_test_state              integer  Current sync state (0 to 4)
+     mm_test_state              integer  Current sync state (0 to 5)
      mm_test_state_name         string   Human readable state name
      mm_test_active             boolean  True when test mode is controlling RPM
      mm_test_cmd_rpm_fwd        number   Commanded RPM for forward rotor (nil when inactive)
@@ -37,6 +48,16 @@
      mm_test_phase_error        number   Current phase error in degrees
      mm_test_sync_achieved      boolean  True when RPM and phase targets met
      mm_test_gcs_override       boolean  GCS override active for ground testing
+
+   Delta Sweep Outputs (mm_test_ prefix):
+     mm_test_delta_active       boolean  True when delta sweep is running
+     mm_test_delta_step         integer  Current step (1 to 4) or 0 if inactive
+     mm_test_delta_pct          number   Current delta percentage
+     mm_test_delta_rpm          number   Current delta RPM value
+     mm_test_delta_sign         integer  Direction (+1 or -1)
+     mm_test_beat_freq_hz       number   Calculated beat frequency in Hz
+     mm_test_step_elapsed_s     number   Time elapsed in current step
+     mm_test_step_dwell_s       number   Configured dwell time per step
 
    Inputs (read from other scripts):
      mm_hv_state                HV state for mode lockout checks
@@ -53,6 +74,12 @@
      mm_test_cmd_phase_0        Set true to change to 0 degree offset
      mm_test_cmd_phase_60       Set true to change to 60 degree offset
      mm_test_cmd_reset          Set true to reset from SYNC_FAULT to SYNC_IDLE
+
+   Delta Sweep Commands:
+     mm_test_cmd_delta_start    Set true to start delta sweep from SYNC_PHASE_0/60
+     mm_test_cmd_delta_next     Set true to advance to next delta step
+     mm_test_cmd_delta_reverse  Set true to reverse delta direction (+/- to -/+)
+     mm_test_cmd_delta_stop     Set true to stop delta sweep and return to sync mode
 ]]--
 
 local common = require("minime_common")
@@ -71,6 +98,16 @@ local ramp_start_rpm = 0
 local settle_start_ms = 0
 local rpm_fault_start_ms = 0
 local phase_fault_start_ms = 0
+
+-- Delta sweep state variables
+local delta_current_step = 0
+local delta_sign = 1
+local delta_step_start_ms = 0
+local delta_dwell_time_s = common.DELTA_DWELL_TIME_S
+local delta_abort_start_ms = 0
+local delta_settle_start_ms = 0
+local delta_last_rpm_log_ms = 0
+local delta_last_imu_log_ms = 0
 
 mm_test_lockout_active = true
 mm_test_lockout_reason = ""
@@ -95,6 +132,22 @@ mm_test_cmd_stop = false
 mm_test_cmd_phase_0 = false
 mm_test_cmd_phase_60 = false
 mm_test_cmd_reset = false
+
+-- Delta RPM sweep mode outputs (OBJ-MOD-5)
+mm_test_delta_active = false
+mm_test_delta_step = 0
+mm_test_delta_pct = 0.0
+mm_test_delta_rpm = 0.0
+mm_test_delta_sign = 1
+mm_test_beat_freq_hz = 0.0
+mm_test_step_elapsed_s = 0.0
+mm_test_step_dwell_s = 30.0
+
+-- Delta RPM sweep mode command inputs
+mm_test_cmd_delta_start = false
+mm_test_cmd_delta_next = false
+mm_test_cmd_delta_reverse = false
+mm_test_cmd_delta_stop = false
 
 --[[
    Check H_RSC_MODE parameter
@@ -266,6 +319,14 @@ local function transition_to_state(new_state, reason)
         mm_test_cmd_rpm_fwd = nil
         mm_test_cmd_rpm_aft = nil
         mm_test_sync_achieved = false
+        mm_test_delta_active = false
+        mm_test_delta_step = 0
+        mm_test_delta_pct = 0.0
+        mm_test_delta_rpm = 0.0
+        mm_test_beat_freq_hz = 0.0
+        mm_test_step_elapsed_s = 0.0
+        delta_current_step = 0
+        delta_abort_start_ms = 0
     end
 end
 
@@ -278,6 +339,10 @@ local function clear_command_flags()
     mm_test_cmd_phase_0 = false
     mm_test_cmd_phase_60 = false
     mm_test_cmd_reset = false
+    mm_test_cmd_delta_start = false
+    mm_test_cmd_delta_next = false
+    mm_test_cmd_delta_reverse = false
+    mm_test_cmd_delta_stop = false
 end
 
 --[[
@@ -428,6 +493,257 @@ local function check_sync_achieved()
 end
 
 --[[
+   Log delta RPM data at 50 Hz
+   Called from handle_delta_rpm when appropriate interval has elapsed
+]]--
+local function log_delta_rpm(fwd_cmd, aft_cmd, fwd_actual, aft_actual, delta_pct, delta_rpm_val, beat_freq)
+    logger:write("DRPM", "FwdC,AftC,FwdA,AftA,DPct,DRPM,Beat", "fffffff",
+        fwd_cmd, aft_cmd,
+        fwd_actual or 0, aft_actual or 0,
+        delta_pct, delta_rpm_val, beat_freq)
+end
+
+--[[
+   Log IMU accelerometer data at 200 Hz for structural response monitoring
+   Called from handle_delta_rpm when appropriate interval has elapsed
+]]--
+local function log_imu_accel()
+    local vibe = ahrs:get_vibration()
+    if vibe == nil then
+        return 0
+    end
+    local vx = vibe:x()
+    local vy = vibe:y()
+    local vz = vibe:z()
+    local magnitude = math.sqrt(vx * vx + vy * vy + vz * vz)
+    logger:write("DIMU", "X,Y,Z,Mag", "ffff", vx, vy, vz, magnitude)
+    return magnitude
+end
+
+--[[
+   Get current delta step parameters
+   @return step table with pct and rpm fields, or nil if not in delta mode
+]]--
+local function get_current_delta_step()
+    if delta_current_step < 1 or delta_current_step > common.DELTA_STEP_COUNT then
+        return nil
+    end
+    return common.get_delta_step(delta_current_step)
+end
+
+--[[
+   Start delta sweep mode from synchronized state
+   @param initial_step Starting step (1 to 4)
+   @return true if started successfully
+]]--
+local function start_delta_sweep(initial_step)
+    if not check_hv_ready() then
+        gcs:send_text(common.MAV_SEVERITY.WARNING,
+            string.format("%s: Cannot start delta sweep, HV not armed", SCRIPT_NAME))
+        return false
+    end
+
+    local step = common.get_delta_step(initial_step)
+    if step == nil then
+        gcs:send_text(common.MAV_SEVERITY.WARNING,
+            string.format("%s: Invalid delta step %d", SCRIPT_NAME, initial_step))
+        return false
+    end
+
+    delta_current_step = initial_step
+    delta_sign = 1
+    delta_step_start_ms = millis():toint()
+    delta_settle_start_ms = delta_step_start_ms
+    delta_abort_start_ms = 0
+    delta_last_rpm_log_ms = 0
+    delta_last_imu_log_ms = 0
+
+    mm_test_delta_active = true
+    mm_test_delta_step = initial_step
+    mm_test_delta_pct = step.pct
+    mm_test_delta_rpm = step.rpm
+    mm_test_delta_sign = delta_sign
+    mm_test_step_elapsed_s = 0.0
+    mm_test_step_dwell_s = delta_dwell_time_s
+
+    gcs:send_text(common.MAV_SEVERITY.INFO,
+        string.format("%s: Delta sweep started at step %d (+/-%.2f%%, +/-%.1f RPM)",
+            SCRIPT_NAME, initial_step, step.pct, step.rpm))
+
+    return true
+end
+
+--[[
+   Advance to next delta step
+   @return true if advanced, false if already at max step
+]]--
+local function advance_delta_step()
+    if delta_current_step >= common.DELTA_STEP_COUNT then
+        gcs:send_text(common.MAV_SEVERITY.INFO,
+            string.format("%s: Delta sweep at max step %d", SCRIPT_NAME, delta_current_step))
+        return false
+    end
+
+    delta_current_step = delta_current_step + 1
+    local step = common.get_delta_step(delta_current_step)
+
+    delta_step_start_ms = millis():toint()
+    delta_settle_start_ms = delta_step_start_ms
+    delta_abort_start_ms = 0
+
+    mm_test_delta_step = delta_current_step
+    mm_test_delta_pct = step.pct
+    mm_test_delta_rpm = step.rpm
+    mm_test_step_elapsed_s = 0.0
+
+    gcs:send_text(common.MAV_SEVERITY.INFO,
+        string.format("%s: Delta sweep advanced to step %d (+/-%.2f%%, +/-%.1f RPM)",
+            SCRIPT_NAME, delta_current_step, step.pct, step.rpm))
+
+    return true
+end
+
+--[[
+   Reverse delta direction (+/- to -/+)
+]]--
+local function reverse_delta_direction()
+    delta_sign = delta_sign * -1
+    mm_test_delta_sign = delta_sign
+
+    local dir = "positive"
+    if delta_sign < 0 then
+        dir = "negative"
+    end
+
+    gcs:send_text(common.MAV_SEVERITY.INFO,
+        string.format("%s: Delta direction reversed to %s", SCRIPT_NAME, dir))
+end
+
+--[[
+   Stop delta sweep and return to synchronized mode
+]]--
+local function stop_delta_sweep()
+    delta_current_step = 0
+    delta_sign = 1
+    delta_abort_start_ms = 0
+
+    mm_test_delta_active = false
+    mm_test_delta_step = 0
+    mm_test_delta_pct = 0.0
+    mm_test_delta_rpm = 0.0
+    mm_test_delta_sign = 1
+    mm_test_beat_freq_hz = 0.0
+    mm_test_step_elapsed_s = 0.0
+
+    gcs:send_text(common.MAV_SEVERITY.INFO,
+        string.format("%s: Delta sweep stopped", SCRIPT_NAME))
+end
+
+--[[
+   Check for abort condition based on structural response
+   @param accel_magnitude Current accelerometer magnitude in g
+   @return true if abort threshold exceeded
+]]--
+local function check_delta_abort(accel_magnitude)
+    local now = millis():toint()
+
+    if now - delta_settle_start_ms < common.DELTA_ABORT_SETTLE_MS then
+        delta_abort_start_ms = 0
+        return false
+    end
+
+    if accel_magnitude > common.DELTA_ABORT_ACCEL_G then
+        if delta_abort_start_ms == 0 then
+            delta_abort_start_ms = now
+        elseif now - delta_abort_start_ms > common.DELTA_ABORT_DURATION_MS then
+            gcs:send_text(common.MAV_SEVERITY.CRITICAL,
+                string.format("%s: Delta abort: vibration %.2fg exceeds %.2fg threshold",
+                    SCRIPT_NAME, accel_magnitude, common.DELTA_ABORT_ACCEL_G))
+            return true
+        end
+    else
+        delta_abort_start_ms = 0
+    end
+
+    return false
+end
+
+--[[
+   Handle DELTA_RPM state
+   Maintain deliberate RPM differential for structural testing
+]]--
+local function handle_delta_rpm()
+    local now = millis():toint()
+    local step = get_current_delta_step()
+
+    if step == nil then
+        gcs:send_text(common.MAV_SEVERITY.WARNING,
+            string.format("%s: Invalid delta step, stopping", SCRIPT_NAME))
+        stop_delta_sweep()
+        transition_to_state(common.SYNC_PHASE_0, "invalid step")
+        return
+    end
+
+    mm_test_active = true
+    mm_test_delta_active = true
+
+    local delta_rpm_half = step.rpm / 2.0
+    local cmd_rpm_fwd = common.SYNC_TARGET_RPM + (delta_rpm_half * delta_sign)
+    local cmd_rpm_aft = common.SYNC_TARGET_RPM - (delta_rpm_half * delta_sign)
+
+    mm_test_cmd_rpm_fwd = cmd_rpm_fwd
+    mm_test_cmd_rpm_aft = cmd_rpm_aft
+
+    local fwd_rpm, aft_rpm = get_actual_rpm()
+    if fwd_rpm ~= nil then
+        mm_test_rpm_fwd = fwd_rpm
+    end
+    if aft_rpm ~= nil then
+        mm_test_rpm_aft = aft_rpm
+    end
+
+    local beat_freq = common.calculate_beat_freq(fwd_rpm or cmd_rpm_fwd, aft_rpm or cmd_rpm_aft)
+    mm_test_beat_freq_hz = beat_freq
+
+    local elapsed_s = (now - delta_step_start_ms) / 1000.0
+    mm_test_step_elapsed_s = elapsed_s
+
+    if now - delta_last_rpm_log_ms >= common.DELTA_RPM_LOG_RATE_MS then
+        log_delta_rpm(cmd_rpm_fwd, cmd_rpm_aft, fwd_rpm, aft_rpm, step.pct, step.rpm, beat_freq)
+        delta_last_rpm_log_ms = now
+    end
+
+    local accel_mag = 0
+    if now - delta_last_imu_log_ms >= common.DELTA_IMU_LOG_RATE_MS then
+        accel_mag = log_imu_accel()
+        delta_last_imu_log_ms = now
+    end
+
+    if check_delta_abort(accel_mag) then
+        stop_delta_sweep()
+        transition_to_state(common.SYNC_FAULT, "vibration abort")
+        return
+    end
+
+    if mm_test_cmd_delta_next then
+        if not advance_delta_step() then
+            gcs:send_text(common.MAV_SEVERITY.INFO,
+                string.format("%s: Delta sweep complete at step %d", SCRIPT_NAME, delta_current_step))
+        end
+    end
+
+    if mm_test_cmd_delta_reverse then
+        reverse_delta_direction()
+    end
+
+    if mm_test_cmd_delta_stop or mm_test_cmd_stop then
+        stop_delta_sweep()
+        transition_to_state(common.SYNC_PHASE_0, "stop command")
+        return
+    end
+end
+
+--[[
    Handle SYNC_IDLE state
    Wait for start command, verify prerequisites
 ]]--
@@ -533,6 +849,13 @@ local function handle_sync_phase_0()
         return
     end
 
+    if mm_test_cmd_delta_start then
+        if start_delta_sweep(1) then
+            transition_to_state(common.DELTA_RPM, "delta start command")
+        end
+        return
+    end
+
     if mm_test_cmd_phase_60 then
         target_phase_offset = common.PHASE_OFFSET_OUT_PHASE
         mm_test_phase_target = 60
@@ -568,6 +891,13 @@ local function handle_sync_phase_60()
 
     if check_sync_fault() then
         transition_to_state(common.SYNC_FAULT, "sync lost")
+        return
+    end
+
+    if mm_test_cmd_delta_start then
+        if start_delta_sweep(1) then
+            transition_to_state(common.DELTA_RPM, "delta start command")
+        end
         return
     end
 
@@ -614,6 +944,8 @@ local function process_state_machine()
         handle_sync_phase_60()
     elseif test_mode_state == common.SYNC_FAULT then
         handle_sync_fault()
+    elseif test_mode_state == common.DELTA_RPM then
+        handle_delta_rpm()
     end
 
     clear_command_flags()
@@ -643,6 +975,11 @@ end
 ]]--
 local function publish_state()
     gcs:send_named_float("SYNC_ST", test_mode_state)
+
+    if test_mode_state == common.DELTA_RPM then
+        gcs:send_named_float("DELTA_STP", mm_test_delta_step)
+        gcs:send_named_float("BEAT_HZ", mm_test_beat_freq_hz)
+    end
 end
 
 --[[

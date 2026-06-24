@@ -119,6 +119,53 @@ The test modes script exports the following global variables for monitoring:
 | mm_test_rsc_mode_ok | boolean | True if H_RSC_MODE = 3 |
 | mm_test_flight_mode_ok | boolean | True if flight mode allows test modes |
 | mm_test_altitude_ok | boolean | True if altitude < 1m AGL |
+| mm_test_state | integer | Current state (0=IDLE, 1=RAMP, 2=PHASE_0, 3=PHASE_60, 4=FAULT, 5=DELTA_RPM) |
+| mm_test_delta_active | boolean | True when delta RPM sweep is active |
+| mm_test_delta_step | integer | Current delta step (1 to 4) or 0 if inactive |
+| mm_test_beat_freq_hz | number | Calculated beat frequency in Hz |
+
+---
+
+## 4A. Delta RPM Sweep Mode (OBJ-MOD-5)
+
+Delta RPM sweep mode creates deliberate rotor speed differentials for structural testing during Phase G.
+
+### 4A.1 Delta Steps
+
+| Step | Delta Percentage | Delta RPM | Beat Frequency |
+|------|-----------------|-----------|----------------|
+| 1 | +/- 0.25% | +/- 2.8 RPM | 0.047 Hz |
+| 2 | +/- 0.5% | +/- 5.7 RPM | 0.095 Hz |
+| 3 | +/- 1.0% | +/- 11.3 RPM | 0.188 Hz |
+| 4 | +/- 2.0% | +/- 22.6 RPM | 0.377 Hz |
+
+### 4A.2 RPM Command Distribution
+
+Forward rotor = Target RPM + (Delta / 2) * Sign
+Aft rotor = Target RPM - (Delta / 2) * Sign
+
+Target RPM is 1131.7 (hover RPM). Sign can be +1 or -1, reversed via delta_reverse command.
+
+### 4A.3 Delta Sweep Commands
+
+| Command | Action |
+|---------|--------|
+| mm_test_cmd_delta_start | Start delta sweep from SYNC_PHASE_0 or SYNC_PHASE_60 |
+| mm_test_cmd_delta_next | Advance to next delta step |
+| mm_test_cmd_delta_reverse | Reverse delta direction (+/- to -/+) |
+| mm_test_cmd_delta_stop | Stop delta sweep and return to synchronized mode |
+
+### 4A.4 Data Logging
+
+RPM data logged at 50 Hz (DRPM message):
+FwdC (forward commanded), AftC (aft commanded), FwdA (forward actual), AftA (aft actual), DPct (delta percentage), DRPM (delta RPM), Beat (beat frequency Hz)
+
+IMU accelerometer data logged at 200 Hz (DIMU message):
+X, Y, Z (acceleration components), Mag (magnitude)
+
+### 4A.5 Abort Thresholds
+
+The delta sweep automatically aborts if vibration exceeds 2.0g for more than 500ms (after 1 second settle time following step changes). On abort, the system transitions to SYNC_FAULT state.
 
 ---
 

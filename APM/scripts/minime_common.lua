@@ -134,6 +134,7 @@ M.SYNC_RAMP = 1                       -- Ramping to synchronized 100% RPM
 M.SYNC_PHASE_0 = 2                    -- Synchronized at 0 degree offset
 M.SYNC_PHASE_60 = 3                   -- Synchronized at 60 degree offset
 M.SYNC_FAULT = 4                      -- Synchronization lost
+M.DELTA_RPM = 5                       -- Delta RPM sweep mode (OBJ-MOD-5)
 
 -- Synchronized mode RPM parameters
 M.SYNC_TARGET_RPM = 1131.7            -- Target rotor RPM for synchronized mode
@@ -152,13 +153,32 @@ M.SYNC_FAULT_RPM_DIFF_MS = 500        -- Duration before fault declared
 M.SYNC_FAULT_PHASE_ERR_DEG = 10.0     -- Phase error threshold for fault
 M.SYNC_FAULT_PHASE_ERR_MS = 1000      -- Phase error duration before fault
 
+-- Delta RPM sweep mode parameters (OBJ-MOD-5)
+-- Step definitions: percentage of hover RPM and absolute RPM values
+M.DELTA_STEPS = {
+    { pct = 0.25, rpm = 2.8 },        -- Step 1: +/- 0.25% (+/- 2.8 RPM)
+    { pct = 0.50, rpm = 5.7 },        -- Step 2: +/- 0.5% (+/- 5.7 RPM)
+    { pct = 1.00, rpm = 11.3 },       -- Step 3: +/- 1.0% (+/- 11.3 RPM)
+    { pct = 2.00, rpm = 22.6 }        -- Step 4: +/- 2.0% (+/- 22.6 RPM)
+}
+M.DELTA_STEP_COUNT = 4                -- Number of delta steps
+M.DELTA_DWELL_TIME_S = 30.0           -- Default dwell time per step in seconds
+M.DELTA_RPM_LOG_RATE_MS = 20          -- 50 Hz RPM logging rate
+M.DELTA_IMU_LOG_RATE_MS = 5           -- 200 Hz IMU logging rate
+
+-- Delta sweep abort thresholds
+M.DELTA_ABORT_ACCEL_G = 2.0           -- Abort if vibration exceeds 2g
+M.DELTA_ABORT_DURATION_MS = 500       -- Duration before abort triggered
+M.DELTA_ABORT_SETTLE_MS = 1000        -- Settle time after step change before monitoring
+
 -- State name lookup for logging
 M.SYNC_STATE_NAMES = {
     [0] = "SYNC_IDLE",
     [1] = "SYNC_RAMP",
     [2] = "SYNC_PHASE_0",
     [3] = "SYNC_PHASE_60",
-    [4] = "SYNC_FAULT"
+    [4] = "SYNC_FAULT",
+    [5] = "DELTA_RPM"
 }
 
 -- Redline thresholds: motor winding temperature (Celsius)
@@ -394,6 +414,30 @@ function M.encoder_counts_to_deg(counts)
     return counts * M.ENC_DEGREES_PER_COUNT
 end
 
+--[[
+   Calculate beat frequency from RPM differential
+   Beat frequency is the rate at which rotor blades pass relative positions
+   @param rpm_fwd Forward rotor RPM
+   @param rpm_aft Aft rotor RPM
+   @return Beat frequency in Hz
+]]--
+function M.calculate_beat_freq(rpm_fwd, rpm_aft)
+    local rpm_diff = math.abs(rpm_fwd - rpm_aft)
+    return rpm_diff / 60.0
+end
+
+--[[
+   Get delta step parameters by index
+   @param step Step number (1 to DELTA_STEP_COUNT)
+   @return Step table with pct and rpm fields, or nil if invalid
+]]--
+function M.get_delta_step(step)
+    if step < 1 or step > M.DELTA_STEP_COUNT then
+        return nil
+    end
+    return M.DELTA_STEPS[step]
+end
+
 return M
 
 --[[
@@ -481,7 +525,7 @@ return M
      mm_test_flight_mode_ok     boolean  True if flight mode allows test modes
      mm_test_altitude_ok        boolean  True if altitude < 1m AGL
      mm_test_arm_flight_ok      boolean  True if not armed or not flying
-     mm_test_state              integer  Current sync state (0=IDLE,1=RAMP,2=PHASE_0,3=PHASE_60,4=FAULT)
+     mm_test_state              integer  Current state (0=IDLE,1=RAMP,2=PHASE_0,3=PHASE_60,4=FAULT,5=DELTA_RPM)
      mm_test_state_name         string   Human readable state name
      mm_test_active             boolean  True when test mode is controlling RPM
      mm_test_cmd_rpm_fwd        number   Commanded RPM for forward rotor (nil when inactive)
@@ -493,12 +537,28 @@ return M
      mm_test_sync_achieved      boolean  True when RPM and phase targets met
      mm_test_gcs_override       boolean  GCS override active for ground testing
 
+   Delta Sweep Outputs (mm_test_ prefix, updated at 100 Hz when DELTA_RPM state):
+     mm_test_delta_active       boolean  True when delta sweep is running
+     mm_test_delta_step         integer  Current step (1 to 4) or 0 if inactive
+     mm_test_delta_pct          number   Current delta percentage
+     mm_test_delta_rpm          number   Current delta RPM value
+     mm_test_delta_sign         integer  Direction (+1 or -1)
+     mm_test_beat_freq_hz       number   Calculated beat frequency in Hz
+     mm_test_step_elapsed_s     number   Time elapsed in current step
+     mm_test_step_dwell_s       number   Configured dwell time per step
+
    Test Modes Command Inputs (set externally to control synchronized mode):
      mm_test_cmd_start          boolean  Set true to start sync mode from SYNC_IDLE
      mm_test_cmd_stop           boolean  Set true to stop and return to SYNC_IDLE
      mm_test_cmd_phase_0        boolean  Set true to change to 0 degree offset
      mm_test_cmd_phase_60       boolean  Set true to change to 60 degree offset
      mm_test_cmd_reset          boolean  Set true to reset from SYNC_FAULT to SYNC_IDLE
+
+   Delta Sweep Command Inputs (set externally to control delta RPM sweep):
+     mm_test_cmd_delta_start    boolean  Set true to start delta sweep from SYNC_PHASE_0/60
+     mm_test_cmd_delta_next     boolean  Set true to advance to next delta step
+     mm_test_cmd_delta_reverse  boolean  Set true to reverse delta direction (+/- to -/+)
+     mm_test_cmd_delta_stop     boolean  Set true to stop delta sweep and return to sync mode
 
    Encoder Interface (mm_enc_ prefix, updated at 100 Hz):
      mm_enc_position_fwd    number   Forward rotor position in degrees (0-360)
