@@ -84,6 +84,11 @@ M.MODE_ALT_HOLD = 2
 M.MODE_RTL = 6
 M.MODE_LAND = 9
 
+-- Landing detection constants
+M.LANDING_RPM_THRESHOLD = 100           -- Rotors below this RPM considered stopped
+M.LANDING_DETECT_DURATION_MS = 2000     -- Duration to confirm landing complete (2 seconds)
+M.LANDING_FLYING_CHECK_ENABLED = true   -- Use vehicle:get_likely_flying() for landing detection
+
 -- Coolant temperature sensor indices (DroneCAN via Beyond Robotix node)
 M.COOLANT_MOTOR_SENSOR_INDEX = 0
 M.COOLANT_INVERTER_SENSOR_INDEX = 1
@@ -354,6 +359,10 @@ return M
      mm_hv_estop_active        boolean  E-stop switch is active
      mm_hv_coolant_motor_temp  number   Motor coolant inlet temperature or nil
      mm_hv_coolant_motor_sensor_ok boolean Coolant temperature sensor status
+     mm_hv_failsafe_active     boolean  Failsafe mode active (RTL/Land from failsafe trigger)
+     mm_hv_failsafe_reason     string   Failsafe reason or empty string
+     mm_hv_landing_in_progress boolean  Landing descent in progress
+     mm_hv_autorotation_active boolean  Autorotation mode active (CAN commands disabled)
 
    Telemetry Outputs (mm_tel_ prefix, updated at 50 Hz):
      mm_tel_desync_state       integer  Desync state (0=normal, 1=alert, 2=warning, 3=critical)

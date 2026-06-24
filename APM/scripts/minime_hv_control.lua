@@ -34,6 +34,10 @@
      mm_hv_estop_active           E-stop switch is active
      mm_hv_coolant_motor_temp     Motor coolant inlet temperature or nil
      mm_hv_coolant_motor_sensor_ok Coolant temperature sensor status
+     mm_hv_failsafe_active        Failsafe mode active (RTL/Land from failsafe trigger)
+     mm_hv_failsafe_reason        Failsafe reason or empty string
+     mm_hv_landing_in_progress    Landing descent in progress
+     mm_hv_autorotation_active    Autorotation mode active (CAN commands disabled)
 
    Inputs (read from DTI driver):
      mm_dti_voltage_fwd, mm_dti_voltage_aft       DC link voltage for precharge monitoring
@@ -97,6 +101,12 @@ mm_hv_estop_active = false
 mm_hv_coolant_motor_temp = nil
 mm_hv_coolant_motor_sensor_ok = false
 
+-- Failsafe integration outputs
+mm_hv_failsafe_active = false
+mm_hv_failsafe_reason = ""
+mm_hv_landing_in_progress = false
+mm_hv_autorotation_active = false
+
 local precharge_start_ms = 0
 local precharge_telem_seen = false
 local PRECHARGE_TELEM_TIMEOUT_MS = 2000
@@ -109,6 +119,16 @@ local settling_start_ms = 0
 local settling_reason = ""
 
 local prev_armed = false
+
+-- Failsafe integration state tracking
+local failsafe_active = false
+local failsafe_reason = nil
+local failsafe_entry_ms = nil
+local prev_mode = nil
+local landing_in_progress = false
+local landing_start_ms = nil
+local autorotation_active = false
+local autorotation_entry_ms = nil
 
 local redline_state = {
     motor_winding_fwd = nil,
@@ -269,6 +289,152 @@ local function trigger_land(reason)
         gcs:send_text(common.MAV_SEVERITY.CRITICAL,
             string.format("HV: LAND triggered (%s)", reason))
     end
+end
+
+local function detect_failsafe()
+    local now_ms = millis():toint()
+    local mode = vehicle:get_mode()
+    local mode_changed = (mode ~= prev_mode)
+
+    if mode_changed then
+        prev_mode = mode
+
+        local is_failsafe_mode = (mode == common.MODE_RTL or mode == common.MODE_LAND)
+
+        if is_failsafe_mode and not failsafe_active then
+            local reason = nil
+
+            if vehicle.has_ekf_failsafed and vehicle:has_ekf_failsafed() then
+                reason = "EKF_FAILURE"
+            elseif battery and battery.has_failsafed and battery:has_failsafed() then
+                if mode == common.MODE_LAND then
+                    reason = "BATTERY_CRITICAL"
+                else
+                    reason = "BATTERY_LOW"
+                end
+            elseif mode == common.MODE_RTL then
+                reason = "FAILSAFE_RTL"
+            elseif mode == common.MODE_LAND then
+                reason = "FAILSAFE_LAND"
+            end
+
+            if reason then
+                failsafe_active = true
+                failsafe_reason = reason
+                failsafe_entry_ms = now_ms
+                gcs:send_text(common.MAV_SEVERITY.WARNING,
+                    string.format("HV: Failsafe detected (%s), maintaining HV armed", reason))
+            end
+        end
+    end
+
+    mm_hv_failsafe_active = failsafe_active
+    mm_hv_failsafe_reason = failsafe_reason or ""
+
+    return failsafe_active, failsafe_reason
+end
+
+local function detect_landing_complete()
+    local now_ms = millis():toint()
+    local mode = vehicle:get_mode()
+
+    local is_landing_mode = (mode == common.MODE_LAND)
+
+    local is_in_landing_descent = false
+    if vehicle.is_landing then
+        is_in_landing_descent = vehicle:is_landing()
+    end
+
+    if not is_landing_mode and not is_in_landing_descent then
+        landing_in_progress = false
+        landing_start_ms = nil
+        mm_hv_landing_in_progress = false
+        return false
+    end
+
+    landing_in_progress = true
+    mm_hv_landing_in_progress = true
+
+    local not_flying = true
+    if common.LANDING_FLYING_CHECK_ENABLED and vehicle.get_likely_flying then
+        not_flying = not vehicle:get_likely_flying()
+    end
+
+    local rpm_fwd = mm_dti_actual_rpm_fwd or 0
+    local rpm_aft = mm_dti_actual_rpm_aft or 0
+    local low_rpm = (rpm_fwd < common.LANDING_RPM_THRESHOLD and
+                     rpm_aft < common.LANDING_RPM_THRESHOLD)
+
+    local is_disarmed = not arming:is_armed()
+
+    local landing_criteria_met = (not_flying and low_rpm) or is_disarmed
+
+    if landing_criteria_met then
+        if landing_start_ms == nil then
+            landing_start_ms = now_ms
+        elseif (now_ms - landing_start_ms) >= common.LANDING_DETECT_DURATION_MS then
+            gcs:send_text(common.MAV_SEVERITY.INFO, "HV: Landing complete detected")
+            return true
+        end
+    else
+        landing_start_ms = nil
+    end
+
+    return false
+end
+
+local function detect_autorotation()
+    local is_armed = arming:is_armed()
+
+    if not is_armed then
+        if autorotation_active then
+            autorotation_active = false
+            autorotation_entry_ms = nil
+        end
+        mm_hv_autorotation_active = false
+        return false
+    end
+
+    local interlock_enabled = true
+    if motors and motors.get_interlock then
+        interlock_enabled = motors:get_interlock()
+    end
+
+    if not interlock_enabled then
+        if not autorotation_active then
+            autorotation_active = true
+            autorotation_entry_ms = millis():toint()
+            gcs:send_text(common.MAV_SEVERITY.WARNING,
+                "HV: Autorotation detected, CAN commands disabled")
+        end
+        mm_hv_autorotation_active = true
+        return true
+    end
+
+    if autorotation_active and interlock_enabled then
+        autorotation_active = false
+        autorotation_entry_ms = nil
+        gcs:send_text(common.MAV_SEVERITY.INFO, "HV: Autorotation exit, CAN commands enabled")
+    end
+
+    mm_hv_autorotation_active = autorotation_active
+    return autorotation_active
+end
+
+local function reset_failsafe_state()
+    failsafe_active = false
+    failsafe_reason = nil
+    failsafe_entry_ms = nil
+    prev_mode = nil
+    landing_in_progress = false
+    landing_start_ms = nil
+    autorotation_active = false
+    autorotation_entry_ms = nil
+
+    mm_hv_failsafe_active = false
+    mm_hv_failsafe_reason = ""
+    mm_hv_landing_in_progress = false
+    mm_hv_autorotation_active = false
 end
 
 local function saturate_command(reason)
@@ -766,6 +932,7 @@ local function reset_redline_state()
     mm_hv_coolant_motor_temp = nil
     mm_hv_coolant_motor_sensor_ok = false
     coolant_sensor_warned = false
+    reset_failsafe_state()
 end
 
 local function init_gpio()
@@ -1063,13 +1230,17 @@ end
 
 local function handle_armed()
     set_energized_state()
-    mm_hv_command_enable = true
 
-    local has_fault, fault_reason = check_dti_fault_non_precharge()
-    if has_fault then
-        emergency_shutdown(fault_reason)
+    local in_autorotation = detect_autorotation()
+
+    if in_autorotation then
+        mm_hv_command_enable = false
+        mm_hv_state = hv_state
+        mm_hv_state_name = state_name(hv_state)
         return
     end
+
+    mm_hv_command_enable = true
 
     local single_rotor_reason = check_single_rotor_failure()
     if single_rotor_reason then
@@ -1077,8 +1248,24 @@ local function handle_armed()
         return
     end
 
+    local has_fault, fault_reason = check_dti_fault_non_precharge()
+    if has_fault then
+        emergency_shutdown(fault_reason)
+        return
+    end
+
     check_redlines()
     if hv_state == common.STATE_FAULTED then
+        return
+    end
+
+    detect_failsafe()
+
+    local landing_complete = detect_landing_complete()
+    if landing_complete then
+        mm_hv_command_enable = false
+        reset_failsafe_state()
+        transition_state(common.STATE_ENERGIZED, "LANDING_COMPLETE")
         return
     end
 
