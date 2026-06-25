@@ -4,8 +4,26 @@
 # Load only during gimbal commissioning after initial flight validation
 #
 # SIYI A8 Mini gimbal configuration
-# Connection: UART Serial to TELEM2 port (RX, TX, GND)
-# Alternative: Ethernet IP 192.168.144.25, Port 37260 (requires Task 9.2)
+#
+# =============================================================================
+# CONNECTION METHOD: UART Serial
+# =============================================================================
+# Selected: UART Serial to TELEM2 port
+# Rationale: Simple wiring, proven reliability per Software Scope Section 9.1
+#
+# Wiring (SIYI A8 Mini to Cube Orange+ TELEM2):
+#   Pin 1 (VCC)  : Not connected (gimbal has own power)
+#   Pin 2 (TX)   : Connect to SIYI RX
+#   Pin 3 (RX)   : Connect to SIYI TX
+#   Pin 4 (CTS)  : Not connected
+#   Pin 5 (RTS)  : Not connected
+#   Pin 6 (GND)  : Connect to SIYI GND
+#
+# Video Feed: Route via HDMI from gimbal to Herelink air unit (separate path)
+#
+# Alternative (not selected): Ethernet IP 192.168.144.25, Port 37260
+# Ethernet provides higher bandwidth and RTSP video but requires additional
+# hardware since Cube Orange+ lacks native Ethernet port.
 #
 # IMPORTANT: MNT1_TYPE requires reboot after changing
 
