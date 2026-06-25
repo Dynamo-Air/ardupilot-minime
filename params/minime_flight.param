@@ -103,7 +103,9 @@ LOG_DISARMED,1
 ATC_RAT_RLL_MAX,60
 
 # Pitch Rate Limit (SPECS.md Section 6.2)
-# Aluminum mast constraint; steel mast supports 57.3 deg/s
+# Current: Aluminum mast, SF > 1.0 at 30 deg/s
+# Upgrade: Steel 4340 mast supports 57.3 deg/s with SF > 3.0
+# For upgrade procedure see: docs/minime/MAST_UPGRADE_PROCEDURE.md
 ATC_RAT_PIT_MAX,30
 
 # Yaw Rate Limit (SPECS.md Section 6.3)
