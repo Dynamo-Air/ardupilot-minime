@@ -7,7 +7,7 @@
      Parameter change requires reboot
      Phase 6A encoder integration must be complete for synchronized mode
 
-   Test Mode Lockout Conditions (per SPECS.md Section 29.5):
+   Test Mode Lockout Conditions:
      H_RSC_MODE not 3 (throttle curve): locked
      Flight mode not STABILIZE or ALT_HOLD: locked
      Altitude > 1m AGL: locked

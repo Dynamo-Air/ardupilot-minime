@@ -9,7 +9,7 @@
      SERVO12_FUNCTION = -1 (GPIO 53, AFT Precharge)
      Reboot required after SERVO_FUNCTION changes
 
-   HVIL monitoring uses ADC input per SPECS.md Section 9.7
+   HVIL monitoring uses ADC input
    Voltage thresholds: healthy ~0.9V, broken ~5V, threshold 2.5V
 
    Inter-Script Interface:

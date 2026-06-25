@@ -7,38 +7,38 @@
 # BASELINE PARAMETERS (from minime_baseline.param)
 # =============================================================================
 
-# Frame Configuration (SPECS.md Section 1)
+# Frame Configuration
 FRAME_CLASS,6
 H_FLYBAR_MODE,0
 H_SW_TYPE,0
 H_DUAL_MODE,1
 
-# Blade Pitch Limits (SPECS.md Section 2)
+# Blade Pitch Limits
 H_COL_MIN,-2.0
 H_COL_MAX,12.0
 H_CYC_MAX,7.0
 
-# Autorotation Parameters (SPECS.md Section 4)
+# Autorotation Parameters
 H_RSC_AROT_ENBL,1
 H_RSC_AROT_IDLE,0
 H_RSC_AROT_RAMP,1.5
 
-# Differential Control Parameters (SPECS.md Section 5)
+# Differential Control Parameters
 H_DCP_SCALER,0
 H_YAW_SCALER,5.6
 H_COLYAW,0.09
 
-# Attitude Rate Controller Limits (SPECS.md Section 6)
+# Attitude Rate Controller Limits
 ATC_RAT_RLL_MAX,60
 ATC_RAT_PIT_MAX,30
 ATC_RAT_YAW_MAX,15
 
-# CAN Bus Configuration (SPECS.md Section 8)
+# CAN Bus Configuration
 CAN_P1_DRIVER,1
 CAN_D1_PROTOCOL,10
 CAN_D1_BITRATE,500000
 
-# GPIO Configuration for HV Control (SPECS.md Section 9)
+# GPIO Configuration for HV Control
 SERVO9_FUNCTION,-1
 SERVO10_FUNCTION,-1
 SERVO11_FUNCTION,-1
@@ -46,7 +46,7 @@ SERVO12_FUNCTION,-1
 SERVO13_FUNCTION,-1
 SERVO14_FUNCTION,-1
 
-# Battery Voltage Thresholds (SPECS.md Section 12)
+# Battery Voltage Thresholds
 BATT_LOW_VOLT,126.0
 BATT_CRT_VOLT,118.8
 
@@ -61,7 +61,7 @@ ARMING_CHECK,0
 # Governor Configuration: Throttle curve mode for test modes
 # Baseline uses H_RSC_MODE = 2 (ESC governor)
 # Test modes (OBJ-MOD-4, OBJ-MOD-5) require H_RSC_MODE = 3 (throttle curve)
-# per SPECS.md Section 29.5
+# Test modes require throttle curve mode
 H_RSC_MODE,3
 H_RSC_SETPOINT,1131.7
 

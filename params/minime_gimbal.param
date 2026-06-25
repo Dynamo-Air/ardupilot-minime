@@ -1,0 +1,67 @@
+# AS-10 MiniMe SIYI A8 Mini Gimbal Parameters
+# WARNING: COMMISSIONING PARAMETERS ONLY
+# These parameters are NOT included in minime_baseline.param
+# Load only during gimbal commissioning after initial flight validation
+#
+# SIYI A8 Mini gimbal configuration
+# Connection: UART Serial to TELEM2 port (RX, TX, GND)
+# Alternative: Ethernet IP 192.168.144.25, Port 37260 (requires Task 9.2)
+#
+# IMPORTANT: MNT1_TYPE requires reboot after changing
+
+# =============================================================================
+# MOUNT CONFIGURATION
+# =============================================================================
+
+# Mount Type: SIYI
+# Value 8 enables native ArduPilot SIYI gimbal driver
+# Reboot required after changing this parameter
+MNT1_TYPE,8
+
+# =============================================================================
+# SERIAL CONFIGURATION
+# =============================================================================
+
+# Serial Protocol: SToRM32 Gimbal Serial
+# SERIAL2 corresponds to TELEM2 port on Cube Orange+
+SERIAL2_PROTOCOL,8
+
+# Serial Baud Rate: 115200 bps
+# Value 115 represents 115200 bps in ArduPilot parameter encoding
+SERIAL2_BAUD,115
+
+# =============================================================================
+# PITCH LIMITS
+# =============================================================================
+
+# Pitch Minimum: Negative 90 degrees (camera pointing straight down)
+MNT1_PITCH_MIN,-90
+
+# Pitch Maximum: Positive 25 degrees (camera tilted up)
+MNT1_PITCH_MAX,25
+
+# =============================================================================
+# YAW LIMITS
+# =============================================================================
+
+# Yaw Minimum: Negative 135 degrees (left)
+MNT1_YAW_MIN,-135
+
+# Yaw Maximum: Positive 135 degrees (right)
+MNT1_YAW_MAX,135
+
+# =============================================================================
+# RC CONTROL
+# =============================================================================
+
+# RC Control Rate: 90 degrees per second
+# Controls gimbal slew rate when using RC stick input
+MNT1_RC_RATE,90
+
+# =============================================================================
+# CAMERA CONFIGURATION
+# =============================================================================
+
+# Camera Type: Mount/Siyi
+# Value 4 enables SIYI camera control integration
+CAM1_TYPE,4

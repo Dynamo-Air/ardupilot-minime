@@ -1,43 +1,43 @@
 # AS-10 MiniMe Baseline Parameters
-# Factory baseline configuration matching SPECS.md
+# Factory baseline configuration
 # Load order: Frame config first, then CAN, then GPIO, then logging
 
-# Frame Configuration (SPECS.md Section 1)
+# Frame Configuration
 FRAME_CLASS,6
 H_FLYBAR_MODE,0
 H_SW_TYPE,0
 H_DUAL_MODE,1
 
-# Blade Pitch Limits (SPECS.md Section 2)
+# Blade Pitch Limits
 H_COL_MIN,-2.0
 H_COL_MAX,12.0
 H_CYC_MAX,7.0
 
-# Governor Configuration (SPECS.md Section 3)
+# Governor Configuration
 H_RSC_MODE,2
 H_RSC_SETPOINT,1131.7
 
-# Autorotation Parameters (SPECS.md Section 4)
+# Autorotation Parameters
 H_RSC_AROT_ENBL,1
 H_RSC_AROT_IDLE,0
 H_RSC_AROT_RAMP,1.5
 
-# Differential Control Parameters (SPECS.md Section 5)
+# Differential Control Parameters
 H_DCP_SCALER,0
 H_YAW_SCALER,5.6
 H_COLYAW,0.09
 
-# Attitude Rate Controller Limits (SPECS.md Section 6)
+# Attitude Rate Controller Limits
 ATC_RAT_RLL_MAX,60
 ATC_RAT_PIT_MAX,30
 ATC_RAT_YAW_MAX,15
 
-# CAN Bus Configuration (SPECS.md Section 8)
+# CAN Bus Configuration
 CAN_P1_DRIVER,1
 CAN_D1_PROTOCOL,10
 CAN_D1_BITRATE,500000
 
-# GPIO Configuration for HV Control (SPECS.md Section 9)
+# GPIO Configuration for HV Control
 # AUX1 (GPIO 50): Forward main contactor
 SERVO9_FUNCTION,-1
 # AUX2 (GPIO 51): Forward precharge
@@ -51,7 +51,7 @@ SERVO13_FUNCTION,-1
 # AUX6 (GPIO 55): Aft STO signal
 SERVO14_FUNCTION,-1
 
-# Failsafe Configuration (SPECS.md Section 11)
+# Failsafe Configuration
 FS_THR_ENABLE,4
 RC_FS_TIMEOUT,1.0
 FS_GCS_ENABLE,1
@@ -62,16 +62,16 @@ BATT_FS_LOW_ACT,2
 BATT_FS_CRT_ACT,1
 BATT_LOW_TIMER,10
 
-# Battery Voltage Thresholds (SPECS.md Section 12)
+# Battery Voltage Thresholds
 BATT_LOW_VOLT,126.0
 BATT_CRT_VOLT,118.8
 
-# Geofence Configuration (SPECS.md Section 13)
+# Geofence Configuration
 FENCE_ENABLE,1
 FENCE_TYPE,7
 FENCE_ACTION,1
 
-# Logging Configuration (SPECS.md Section 15)
+# Logging Configuration
 # LOG_BITMASK = 176126 enables:
 #   ATTITUDE_MED, GPS, PM (Performance Monitoring), CTUN, NTUN,
 #   RCIN, IMU, CMD, CURRENT, RCOUT (servo output), OPTFLOW,
