@@ -15,7 +15,7 @@
 
    Synchronized Mode States (OBJ-MOD-4):
      SYNC_IDLE: Both rotors at matched RPM, waiting for start command
-     SYNC_RAMP: Ramping to synchronized 100% RPM (1131.7 RPM)
+     SYNC_RAMP: Ramping to synchronized 100% RPM (1074.2 RPM)
      SYNC_PHASE_0: Synchronized at 0 degree phase offset
      SYNC_PHASE_60: Synchronized at 60 degree phase offset
      SYNC_FAULT: Synchronization lost, safe state
@@ -23,10 +23,10 @@
 
    Delta RPM Sweep (OBJ-MOD-5):
      Four configurable steps with deliberate rotor speed differential:
-       Step 1: +/- 0.25% (+/- 2.8 RPM)
-       Step 2: +/- 0.5% (+/- 5.7 RPM)
-       Step 3: +/- 1.0% (+/- 11.3 RPM)
-       Step 4: +/- 2.0% (+/- 22.6 RPM)
+       Step 1: +/- 0.25% (+/- 2.69 RPM)
+       Step 2: +/- 0.5% (+/- 5.37 RPM)
+       Step 3: +/- 1.0% (+/- 10.74 RPM)
+       Step 4: +/- 2.0% (+/- 21.48 RPM)
      Forward rotor = target + delta/2
      Aft rotor = target - delta/2
      Beat frequency logged for structural analysis
@@ -260,7 +260,7 @@ end
 local function check_all_lockouts()
     local ok, reason
 
-    -- H_RSC_MODE check cannot be overridden per TEST_MODES.md Section 3.4
+    -- H_RSC_MODE check cannot be overridden (throttle curve mode required for test modes)
     ok, reason = check_rsc_mode()
     if not ok then
         mm_test_lockout_active = true

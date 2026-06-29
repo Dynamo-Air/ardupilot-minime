@@ -26,7 +26,7 @@ H_RSC_AROT_RAMP,1.5
 # Differential Control Parameters
 H_DCP_SCALER,0
 H_YAW_SCALER,5.6
-H_COLYAW,0.09
+H_COLYAW,0.10
 
 # Attitude Rate Controller Limits
 ATC_RAT_RLL_MAX,60
@@ -63,7 +63,7 @@ ARMING_CHECK,0
 # Test modes (OBJ-MOD-4, OBJ-MOD-5) require H_RSC_MODE = 3 (throttle curve)
 # Test modes require throttle curve mode
 H_RSC_MODE,3
-H_RSC_SETPOINT,1131.7
+H_RSC_SETPOINT,1074.2
 
 # Failsafe Configuration: Disabled for controlled bench environment
 # WARNING: Re-enable all failsafes for flight

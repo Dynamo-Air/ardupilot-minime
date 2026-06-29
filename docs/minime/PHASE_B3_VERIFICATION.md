@@ -47,7 +47,7 @@ Reference: SPECS.md Section 10.6
 
 ### 1.4 Go/No-Go Decision
 
-The servo undersizing constraint (SF = 0.69 vs 3.0x design margin, SF = 2.08 vs worst case) requires monitoring during Phase B-3.
+The servo undersizing constraint (SF = 1.33 vs 3.0x design margin, SF = 3.98 vs worst case) requires monitoring during Phase B-3.
 
 Decision Matrix:
 - If saturation frequency is less than 1%: GO with current servos

@@ -138,17 +138,17 @@ Delta RPM sweep mode creates deliberate rotor speed differentials for structural
 
 | Step | Delta Percentage | Delta RPM | Beat Frequency |
 |------|-----------------|-----------|----------------|
-| 1 | +/- 0.25% | +/- 2.8 RPM | 0.047 Hz |
-| 2 | +/- 0.5% | +/- 5.7 RPM | 0.095 Hz |
-| 3 | +/- 1.0% | +/- 11.3 RPM | 0.188 Hz |
-| 4 | +/- 2.0% | +/- 22.6 RPM | 0.377 Hz |
+| 1 | +/- 0.25% | +/- 2.69 RPM | 0.045 Hz |
+| 2 | +/- 0.5% | +/- 5.37 RPM | 0.090 Hz |
+| 3 | +/- 1.0% | +/- 10.74 RPM | 0.179 Hz |
+| 4 | +/- 2.0% | +/- 21.48 RPM | 0.358 Hz |
 
 ### 4A.2 RPM Command Distribution
 
 Forward rotor = Target RPM + (Delta / 2) * Sign
 Aft rotor = Target RPM - (Delta / 2) * Sign
 
-Target RPM is 1131.7 (hover RPM). Sign can be +1 or -1, reversed via delta_reverse command.
+Target RPM is 1074.2 (hover RPM). Sign can be +1 or -1, reversed via delta_reverse command.
 
 ### 4A.3 Delta Sweep Commands
 

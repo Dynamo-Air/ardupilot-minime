@@ -1,6 +1,7 @@
 --[[
    MiniMe Telemetry Aggregation
-   RPM differential calculation and desync monitoring for AS-10 tandem helicopter
+   RPM differential calculation, desync monitoring, and gyroscopic coupling
+   feedforward for AS-10 tandem helicopter
 
    Prerequisites:
      minime_dti_driver.lua loaded (provides mm_dti_* globals)
@@ -21,6 +22,21 @@
      mm_tel_spinup_suppressed  True during 5 second spinup suppression window
      mm_tel_rpm_fwd_filtered   Low pass filtered forward RPM
      mm_tel_rpm_aft_filtered   Low pass filtered aft RPM
+     mm_tel_roll_rate_dps      Current roll rate from IMU (deg/s)
+     mm_tel_pitch_correction_dps  K_rp feedforward pitch correction (deg/s)
+
+   K_rp Gyroscopic Coupling Feedforward:
+     ArduPilot does NOT natively compensate roll to pitch gyroscopic coupling.
+     This script calculates the required feedforward: pitch_correction = K_RP * roll_rate
+     The calculated value is logged for Phase W validation.
+
+     Implementation Options:
+       1. Scripted control mode via vehicle:set_target_throttle_rate_rpy() takes full
+          attitude control and requires implementing complete attitude logic in Lua
+       2. Firmware modification adds cross-coupling directly in AC_AttitudeControl
+       3. Calculate and log for validation, then implement via firmware patch
+
+     This implementation uses option 3: calculate and log for Phase W HIL validation.
 
    Inputs (read from other scripts):
      mm_dti_actual_rpm_fwd, mm_dti_actual_rpm_aft   Actual RPM from DTI telemetry
@@ -80,6 +96,8 @@ mm_tel_rpm_fwd_filtered = 0
 mm_tel_rpm_aft_filtered = 0
 mm_tel_desync_state = common.DESYNC_NORMAL
 mm_tel_rpm_diff = 0
+mm_tel_roll_rate_dps = 0
+mm_tel_pitch_correction_dps = 0
 
 local function lpf_update(current, new_value)
     return LPF_ALPHA * new_value + (1 - LPF_ALPHA) * current
@@ -268,10 +286,59 @@ local function publish_initial_values()
     gcs:send_named_float("RPM_DIFF", 0)
 end
 
+--[[
+   K_rp Gyroscopic Coupling Feedforward Calculation
+   Roll commands induce pitch moments via gyroscopic precession.
+   Feedforward compensates by adding pitch rate proportional to roll rate.
+
+   Formula: pitch_correction = K_RP * roll_rate
+   K_RP = 0.4730 per second (derived from 2*H/M_pitch = 2*56.53/239.0)
+
+   Phase W Validation Criteria:
+     Roll step 10 deg/s produces pitch transient less than 3 degrees
+     Steady roll 30 deg/s produces pitch rate less than 5 deg/s
+
+   This calculates and logs the feedforward correction for Phase W validation.
+   Injection into the attitude controller requires either scripted control mode
+   (vehicle:set_target_throttle_rate_rpy) or firmware modification.
+]]--
+local krp_log_counter = 0
+local KRP_LOG_DIVIDER = 25             -- Log at 2 Hz (50 Hz / 25)
+
+local function calculate_gyro_coupling_feedforward()
+    local gyro = ahrs:get_gyro()
+    if not gyro then
+        mm_tel_roll_rate_dps = 0
+        mm_tel_pitch_correction_dps = 0
+        return
+    end
+
+    local roll_rate_rad = gyro:x()
+    local roll_rate_dps = math.deg(roll_rate_rad)
+
+    local pitch_correction_dps = common.K_RP * roll_rate_dps
+
+    mm_tel_roll_rate_dps = roll_rate_dps
+    mm_tel_pitch_correction_dps = pitch_correction_dps
+
+    krp_log_counter = krp_log_counter + 1
+    if krp_log_counter >= KRP_LOG_DIVIDER then
+        krp_log_counter = 0
+
+        if arming:is_armed() and math.abs(roll_rate_dps) > 1.0 then
+            logger:write("GYCF", "RollR,PitchC", "ff",
+                roll_rate_dps,
+                pitch_correction_dps)
+        end
+    end
+end
+
 local update
 
 function update()
     local now_ms = millis():toint()
+
+    calculate_gyro_coupling_feedforward()
 
     local raw_rpm_fwd = mm_dti_actual_rpm_fwd
     local raw_rpm_aft = mm_dti_actual_rpm_aft
@@ -357,8 +424,10 @@ local function init()
     mm_tel_rpm_aft_filtered = 0
     mm_tel_desync_state = common.DESYNC_NORMAL
     mm_tel_rpm_diff = 0
+    mm_tel_roll_rate_dps = 0
+    mm_tel_pitch_correction_dps = 0
 
-    gcs:send_text(common.MAV_SEVERITY.INFO, "TEL: Telemetry aggregation initialized")
+    gcs:send_text(common.MAV_SEVERITY.INFO, "TEL: Telemetry with K_rp feedforward initialized")
 
     publish_initial_values()
 

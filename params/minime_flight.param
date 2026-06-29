@@ -34,7 +34,7 @@ H_CYC_MAX,7.0
 # Uses ESC governor mode for flight (H_RSC_MODE = 2)
 # Test modes use H_RSC_MODE = 3 (throttle curve)
 H_RSC_MODE,2
-H_RSC_SETPOINT,1131.7
+H_RSC_SETPOINT,1074.2
 
 # Autorotation Parameters
 H_RSC_AROT_ENBL,1
@@ -45,7 +45,7 @@ H_RSC_AROT_RAMP,1.5
 H_DCP_SCALER,0
 H_YAW_SCALER,5.6
 # H_COLYAW sign to be verified during Phase T; flip if yaw coupling worsens
-H_COLYAW,0.09
+H_COLYAW,0.10
 
 # CAN Bus Configuration
 CAN_P1_DRIVER,1

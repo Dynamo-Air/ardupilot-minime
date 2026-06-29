@@ -9,9 +9,10 @@
 local M = {}
 
 -- Vehicle constants
-M.HOVER_RPM = 1131.7
-M.MOTOR_RPM = 4526.8
-M.ERPM_HOVER = 45268
+M.HOVER_RPM = 1074.2
+M.MOTOR_RPM = 4296.7
+M.ERPM_HOVER = 42967
+M.AUTOROT_RPM = 1020.5
 M.GEARBOX_RATIO = 4
 M.POLE_PAIRS = 10
 
@@ -64,9 +65,9 @@ M.DESYNC_WARNING_PCT = 0.50
 M.DESYNC_HARD_PCT = 1.00
 
 -- Desync thresholds (absolute RPM)
-M.DESYNC_ALERT_RPM = 2.8
-M.DESYNC_WARNING_RPM = 5.7
-M.DESYNC_HARD_RPM = 11.3
+M.DESYNC_ALERT_RPM = 2.69
+M.DESYNC_WARNING_RPM = 5.37
+M.DESYNC_HARD_RPM = 10.74
 
 -- Spin up suppression time after arming (milliseconds)
 M.SPINUP_SUPPRESS_MS = 5000
@@ -137,8 +138,8 @@ M.SYNC_FAULT = 4                      -- Synchronization lost
 M.DELTA_RPM = 5                       -- Delta RPM sweep mode (OBJ-MOD-5)
 
 -- Synchronized mode RPM parameters
-M.SYNC_TARGET_RPM = 1131.7            -- Target rotor RPM for synchronized mode
-M.SYNC_RPM_TOLERANCE = 1.13           -- 0.1% of hover RPM matching tolerance
+M.SYNC_TARGET_RPM = 1074.2            -- Target rotor RPM for synchronized mode
+M.SYNC_RPM_TOLERANCE = 1.07           -- 0.1% of hover RPM matching tolerance
 M.SYNC_RAMP_RATE_RPM_S = 100.0        -- RPM per second ramp rate
 M.SYNC_SETTLE_TIME_MS = 2000          -- Time to stabilize at target RPM
 
@@ -153,13 +154,28 @@ M.SYNC_FAULT_RPM_DIFF_MS = 500        -- Duration before fault declared
 M.SYNC_FAULT_PHASE_ERR_DEG = 10.0     -- Phase error threshold for fault
 M.SYNC_FAULT_PHASE_ERR_MS = 1000      -- Phase error duration before fault
 
+-- Gyroscopic coupling compensation gains
+M.K_RP = 0.4730                       -- Roll to pitch coupling (1/s), feedforward required
+M.K_PR = 0.0                          -- Pitch to roll (1/s), zero for counter rotating tandem
+M.K_CY = 0.0968                       -- Collective to yaw coupling, maps to H_COLYAW = 0.10
+
+-- Yaw authority reduction factor (STRUCTURAL CONSTRAINT, blade root SF protection)
+M.ETA_YAW = 0.30                      -- NOT a tuning parameter
+
+-- Cyclic saturation management
+M.CYCLIC_ROLL_PRI = 0.70              -- Roll priority in cyclic budget (70%)
+M.CYCLIC_SAT_WARN = 0.80              -- Warning threshold at 80% saturation
+M.CYCLIC_SAT_LIM = 0.95               -- Limit at 95% saturation
+M.YAW_COLLECTIVE_DERATE = true        -- Enable yaw derate at high collective
+M.YAW_RATE_MAX_EFFECTIVE = 4.5        -- Effective yaw rate limit with eta_yaw (deg/s)
+
 -- Delta RPM sweep mode parameters (OBJ-MOD-5)
 -- Step definitions: percentage of hover RPM and absolute RPM values
 M.DELTA_STEPS = {
-    { pct = 0.25, rpm = 2.8 },        -- Step 1: +/- 0.25% (+/- 2.8 RPM)
-    { pct = 0.50, rpm = 5.7 },        -- Step 2: +/- 0.5% (+/- 5.7 RPM)
-    { pct = 1.00, rpm = 11.3 },       -- Step 3: +/- 1.0% (+/- 11.3 RPM)
-    { pct = 2.00, rpm = 22.6 }        -- Step 4: +/- 2.0% (+/- 22.6 RPM)
+    { pct = 0.25, rpm = 2.69 },       -- Step 1: +/- 0.25% (+/- 2.69 RPM)
+    { pct = 0.50, rpm = 5.37 },       -- Step 2: +/- 0.5% (+/- 5.37 RPM)
+    { pct = 1.00, rpm = 10.74 },      -- Step 3: +/- 1.0% (+/- 10.74 RPM)
+    { pct = 2.00, rpm = 21.48 }       -- Step 4: +/- 2.0% (+/- 21.48 RPM)
 }
 M.DELTA_STEP_COUNT = 4                -- Number of delta steps
 M.DELTA_DWELL_TIME_S = 30.0           -- Default dwell time per step in seconds
@@ -269,9 +285,9 @@ M.REDLINE_MOTOR_RPM = {
 
 -- Redline thresholds: rotor RPM
 M.REDLINE_ROTOR_RPM = {
-    caution = 1004,
-    warning = 1050,
-    hard = 1100
+    caution = 1128,
+    warning = 1128,
+    hard = 1182
 }
 
 -- Redline thresholds: battery pack temperature (Celsius)
@@ -458,7 +474,6 @@ return M
 
 --[[
    Inter-Script Communication Contract
-   Reference: TODO.md Section 2.1a
 
    All MiniMe scripts share data via global variables with prefixed namespaces.
    Scripts may load in any order. Dependent scripts should check for nil values
