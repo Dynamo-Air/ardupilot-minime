@@ -1,7 +1,7 @@
 --[[
    MiniMe Telemetry Aggregation
-   RPM differential calculation, desync monitoring, and gyroscopic coupling
-   feedforward for AS-10 tandem helicopter
+   RPM differential calculation, desync monitoring, gyroscopic coupling
+   feedforward, and modal resonance monitoring for AS-10 tandem helicopter
 
    Prerequisites:
      minime_dti_driver.lua loaded (provides mm_dti_* globals)
@@ -24,6 +24,11 @@
      mm_tel_rpm_aft_filtered   Low pass filtered aft RPM
      mm_tel_roll_rate_dps      Current roll rate from IMU (deg/s)
      mm_tel_pitch_correction_dps  K_rp feedforward pitch correction (deg/s)
+     mm_tel_modal_state        Modal state (0=normal, 1=caution, 2=warning)
+     mm_tel_modal_rms_g        Combined RMS magnitude in g
+     mm_tel_accel_rms_x        X axis RMS acceleration (m/s^2)
+     mm_tel_accel_rms_y        Y axis RMS acceleration (m/s^2)
+     mm_tel_accel_rms_z        Z axis RMS acceleration (m/s^2)
 
    K_rp Gyroscopic Coupling Feedforward:
      ArduPilot does NOT natively compensate roll to pitch gyroscopic coupling.
@@ -99,6 +104,27 @@ mm_tel_rpm_diff = 0
 mm_tel_roll_rate_dps = 0
 mm_tel_pitch_correction_dps = 0
 
+-- Modal resonance monitoring outputs
+mm_tel_modal_state = common.MODAL_NORMAL
+mm_tel_modal_rms_g = 0
+mm_tel_accel_rms_x = 0
+mm_tel_accel_rms_y = 0
+mm_tel_accel_rms_z = 0
+
+-- Modal resonance monitoring state (local)
+local MODAL_BUFFER_SIZE = 25          -- 0.5 second window at 50 Hz
+local MODAL_LOG_DIVIDER = 5           -- 50 Hz / 5 = 10 Hz logging
+local MODAL_G_CONVERT = 9.80665       -- m/s^2 per g
+local modal_buffer_x = {}
+local modal_buffer_y = {}
+local modal_buffer_z = {}
+local modal_buffer_idx = 1
+local modal_buffer_count = 0
+local modal_state = common.MODAL_NORMAL
+local modal_below_threshold_ms = nil
+local last_modal_alert_ms = 0
+local modal_log_counter = 0
+
 local function lpf_update(current, new_value)
     return LPF_ALPHA * new_value + (1 - LPF_ALPHA) * current
 end
@@ -120,6 +146,51 @@ local function rolling_buffer_average()
         sum = sum + rolling_buffer[i]
     end
     return sum / rolling_buffer_count
+end
+
+--[[
+   Push squared acceleration values into modal RMS buffers
+   @param ax X axis acceleration (m/s^2)
+   @param ay Y axis acceleration (m/s^2)
+   @param az Z axis acceleration (m/s^2)
+]]--
+local function modal_buffer_push(ax, ay, az)
+    modal_buffer_x[modal_buffer_idx] = ax * ax
+    modal_buffer_y[modal_buffer_idx] = ay * ay
+    modal_buffer_z[modal_buffer_idx] = az * az
+    modal_buffer_idx = (modal_buffer_idx % MODAL_BUFFER_SIZE) + 1
+    if modal_buffer_count < MODAL_BUFFER_SIZE then
+        modal_buffer_count = modal_buffer_count + 1
+    end
+end
+
+--[[
+   Calculate RMS from modal buffers
+   @return rms_x, rms_y, rms_z, rms_mag_g (all in m/s^2 except mag in g)
+]]--
+local function modal_buffer_rms()
+    if modal_buffer_count == 0 then
+        return 0, 0, 0, 0
+    end
+
+    local sum_x, sum_y, sum_z = 0, 0, 0
+    for i = 1, modal_buffer_count do
+        sum_x = sum_x + modal_buffer_x[i]
+        sum_y = sum_y + modal_buffer_y[i]
+        sum_z = sum_z + modal_buffer_z[i]
+    end
+
+    local mean_x = sum_x / modal_buffer_count
+    local mean_y = sum_y / modal_buffer_count
+    local mean_z = sum_z / modal_buffer_count
+
+    local rms_x = math.sqrt(mean_x)
+    local rms_y = math.sqrt(mean_y)
+    local rms_z = math.sqrt(mean_z)
+    local rms_mag = math.sqrt(mean_x + mean_y + mean_z)
+    local rms_mag_g = rms_mag / MODAL_G_CONVERT
+
+    return rms_x, rms_y, rms_z, rms_mag_g
 end
 
 local function is_spinup_suppressed()
@@ -145,6 +216,23 @@ local function reset_on_disarm()
     desync_below_threshold_ms = nil
     last_desync_alert_ms = 0
     mm_tel_desync_state = common.DESYNC_NORMAL
+
+    -- Reset modal monitoring state
+    modal_state = common.MODAL_NORMAL
+    modal_below_threshold_ms = nil
+    last_modal_alert_ms = 0
+    modal_buffer_count = 0
+    modal_buffer_idx = 1
+    for i = 1, MODAL_BUFFER_SIZE do
+        modal_buffer_x[i] = 0
+        modal_buffer_y[i] = 0
+        modal_buffer_z[i] = 0
+    end
+    mm_tel_modal_state = common.MODAL_NORMAL
+    mm_tel_modal_rms_g = 0
+    mm_tel_accel_rms_x = 0
+    mm_tel_accel_rms_y = 0
+    mm_tel_accel_rms_z = 0
 end
 
 local function get_target_desync_state(delta_pct)
@@ -287,6 +375,127 @@ local function publish_initial_values()
 end
 
 --[[
+   Evaluate modal resonance state based on RMS magnitude
+   @param rms_g RMS magnitude in g
+   @param now_ms Current timestamp
+   @return true if state changed
+]]--
+local function evaluate_modal_state(rms_g, now_ms)
+    local target_state
+    if rms_g >= common.MODAL_ACCEL_WARNING_G then
+        target_state = common.MODAL_WARNING
+    elseif rms_g >= common.MODAL_ACCEL_CAUTION_G then
+        target_state = common.MODAL_CAUTION
+    else
+        target_state = common.MODAL_NORMAL
+    end
+
+    if target_state > modal_state then
+        modal_state = target_state
+        modal_below_threshold_ms = nil
+        mm_tel_modal_state = modal_state
+        return true
+    elseif target_state < modal_state then
+        if modal_below_threshold_ms == nil then
+            modal_below_threshold_ms = now_ms
+        elseif now_ms - modal_below_threshold_ms >= common.MODAL_HYSTERESIS_MS then
+            modal_state = target_state
+            modal_below_threshold_ms = nil
+            mm_tel_modal_state = modal_state
+            return true
+        end
+    else
+        modal_below_threshold_ms = nil
+    end
+
+    mm_tel_modal_state = modal_state
+    return false
+end
+
+--[[
+   Execute response to modal state change
+   @param new_state New modal state
+   @param rms_g Current RMS magnitude in g
+   @param now_ms Current timestamp
+]]--
+local function execute_modal_response(new_state, rms_g, now_ms)
+    if new_state == common.MODAL_NORMAL then
+        return
+    end
+
+    logger:write("MODL", "AxRms,AyRms,AzRms,MagG,St", "ffffB",
+        mm_tel_accel_rms_x, mm_tel_accel_rms_y, mm_tel_accel_rms_z,
+        rms_g, new_state)
+
+    if now_ms - last_modal_alert_ms < common.MODAL_ALERT_RATE_LIMIT_MS then
+        return
+    end
+
+    if new_state == common.MODAL_CAUTION then
+        gcs:send_text(common.MAV_SEVERITY.NOTICE,
+            string.format("TEL: Modal RMS caution %.2fg", rms_g))
+        last_modal_alert_ms = now_ms
+    elseif new_state == common.MODAL_WARNING then
+        gcs:send_text(common.MAV_SEVERITY.WARNING,
+            string.format("TEL: Modal RMS warning %.2fg", rms_g))
+        last_modal_alert_ms = now_ms
+    end
+end
+
+--[[
+   Modal Resonance Monitoring
+   Calculate rolling RMS of accelerometer data to detect structural resonance.
+
+   Sample rate: 50 Hz (limited by telemetry loop rate)
+   Window: 0.5 seconds (25 samples)
+   Log rate: 10 Hz for post flight analysis
+]]--
+local function calculate_modal_rms()
+    if is_spinup_suppressed() then
+        modal_state = common.MODAL_NORMAL
+        modal_below_threshold_ms = nil
+        mm_tel_modal_state = common.MODAL_NORMAL
+        mm_tel_modal_rms_g = 0
+        return
+    end
+
+    local accel = ahrs:get_accel()
+    if not accel then
+        return
+    end
+
+    local ax = accel:x()
+    local ay = accel:y()
+    local az = accel:z()
+
+    modal_buffer_push(ax, ay, az)
+
+    local rms_x, rms_y, rms_z, rms_mag_g = modal_buffer_rms()
+
+    mm_tel_accel_rms_x = rms_x
+    mm_tel_accel_rms_y = rms_y
+    mm_tel_accel_rms_z = rms_z
+    mm_tel_modal_rms_g = rms_mag_g
+
+    local now_ms = millis():toint()
+    local state_changed = evaluate_modal_state(rms_mag_g, now_ms)
+
+    if state_changed then
+        execute_modal_response(modal_state, rms_mag_g, now_ms)
+    end
+
+    modal_log_counter = modal_log_counter + 1
+    if modal_log_counter >= MODAL_LOG_DIVIDER then
+        modal_log_counter = 0
+
+        if arming:is_armed() then
+            logger:write("MODL", "AxRms,AyRms,AzRms,MagG,St", "ffffB",
+                rms_x, rms_y, rms_z, rms_mag_g, modal_state)
+        end
+    end
+end
+
+--[[
    K_rp Gyroscopic Coupling Feedforward Calculation
    Roll commands induce pitch moments via gyroscopic precession.
    Feedforward compensates by adding pitch rate proportional to roll rate.
@@ -339,6 +548,7 @@ function update()
     local now_ms = millis():toint()
 
     calculate_gyro_coupling_feedforward()
+    calculate_modal_rms()
 
     local raw_rpm_fwd = mm_dti_actual_rpm_fwd
     local raw_rpm_aft = mm_dti_actual_rpm_aft
@@ -412,6 +622,12 @@ local function init()
         rolling_buffer[i] = 0
     end
 
+    for i = 1, MODAL_BUFFER_SIZE do
+        modal_buffer_x[i] = 0
+        modal_buffer_y[i] = 0
+        modal_buffer_z[i] = 0
+    end
+
     mm_tel_delta_rpm = 0
     mm_tel_delta_pct = 0
     mm_tel_delta_rpm_avg = 0
@@ -426,8 +642,13 @@ local function init()
     mm_tel_rpm_diff = 0
     mm_tel_roll_rate_dps = 0
     mm_tel_pitch_correction_dps = 0
+    mm_tel_modal_state = common.MODAL_NORMAL
+    mm_tel_modal_rms_g = 0
+    mm_tel_accel_rms_x = 0
+    mm_tel_accel_rms_y = 0
+    mm_tel_accel_rms_z = 0
 
-    gcs:send_text(common.MAV_SEVERITY.INFO, "TEL: Telemetry with K_rp feedforward initialized")
+    gcs:send_text(common.MAV_SEVERITY.INFO, "TEL: Telemetry initialized")
 
     publish_initial_values()
 

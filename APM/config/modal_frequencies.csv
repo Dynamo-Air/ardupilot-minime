@@ -1,0 +1,19 @@
+# Modal Frequencies Configuration
+# Format: MODE_NUM,TYPE,FREQUENCY_HZ,STATUS,DESCRIPTION
+#
+# TYPE: torsion, bend-vert, bend-lat
+# STATUS: CLEAR = outside keep-out bands, IN_3P = within 3P band, IN_6P = within 6P band
+#
+# Keep-Out Bands (hover RPM 1074.2, +/-15%):
+#   1P = 17.9 Hz (15.2 - 20.6 Hz)
+#   3P = 53.7 Hz (45.7 - 61.8 Hz)
+#   6P = 107.4 Hz (91.3 - 123.5 Hz)
+#
+# Source: AS_mini_truss_design_summary.md Section 5
+# FE Model: tools/AS_mini_truss.py
+#
+1,torsion,25.2,CLEAR,Mode 1 torsion outside all keep-out bands
+2,bend-vert,49.5,IN_3P,Mode 2 vertical bending IN 3P BAND (45.7-61.8 Hz)
+3,bend-lat,49.5,IN_3P,Mode 3 lateral bending IN 3P BAND (45.7-61.8 Hz)
+4,torsion,94.0,IN_6P,Mode 4 torsion IN 6P BAND (91.3-123.5 Hz)
+5,higher,300.0,CLEAR,Mode 5+ higher modes above all keep-out bands

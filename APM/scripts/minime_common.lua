@@ -187,6 +187,18 @@ M.DELTA_ABORT_ACCEL_G = 2.0           -- Abort if vibration exceeds 2g
 M.DELTA_ABORT_DURATION_MS = 500       -- Duration before abort triggered
 M.DELTA_ABORT_SETTLE_MS = 1000        -- Settle time after step change before monitoring
 
+-- Modal resonance monitoring thresholds
+-- Values TBD during Phase G ground vibration test
+M.MODAL_ACCEL_CAUTION_G = 0.5         -- Caution threshold (placeholder)
+M.MODAL_ACCEL_WARNING_G = 1.0         -- Warning threshold (placeholder)
+M.MODAL_HYSTERESIS_MS = 2000          -- Hysteresis for state transitions
+M.MODAL_ALERT_RATE_LIMIT_MS = 5000    -- GCS alert rate limiting
+
+-- Modal alert states
+M.MODAL_NORMAL = 0
+M.MODAL_CAUTION = 1
+M.MODAL_WARNING = 2
+
 -- RPM avoidance band constants
 M.AVOID_BAND_MAX_COUNT = 4            -- Maximum number of configurable bands
 M.AVOID_BAND_CONFIG_PATH = "APM/config/rpm_bands.txt"  -- SD card configuration file
