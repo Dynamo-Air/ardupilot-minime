@@ -1,0 +1,176 @@
+# AS-10 MiniMe Tandem Helicopter SITL Parameters
+# Reference: SPECS.md
+# Purpose: SITL testing for Phase W validation
+
+# Frame Configuration (tandem dual helicopter)
+# FRAME_CLASS 11 = Heli_Dual (not 6 which is single heli)
+FRAME_CLASS 11
+H_DUAL_MODE 1
+
+# Blade Pitch Limits (SPECS.md Section 2)
+H_COL_MIN 1300
+H_COL_MAX 1800
+H_COL_ANG_MIN -2
+H_COL_ANG_MAX 12
+H_CYC_MAX 7.0
+
+# Second rotor collective limits
+H_COL2_MIN 1300
+H_COL2_MAX 1800
+
+# Governor Mode (ESC governor for normal flight)
+H_RSC_MODE 2
+H_RSC_SETPOINT 70
+
+# Yaw collective coupling (SPECS.md Section 5.3)
+H_COLYAW 0.10
+
+# Yaw scaler for differential cyclic (SPECS.md Section 5.2)
+# Hingeless rotor uses differential cyclic for yaw, not differential collective
+H_YAW_SCALER 5.6
+H_DCP_SCALER 0
+
+# Rate Limits (SPECS.md Section 6)
+# Roll: 60 deg/s (first flight conservative)
+# Pitch: 30 deg/s (aluminum mast limit)
+# Yaw: 15 deg/s (authority limited, eta_yaw = 0.30)
+ATC_RAT_RLL_MAX 60
+ATC_RAT_PIT_MAX 30
+ATC_RAT_YAW_MAX 15
+
+# Attitude Controller Gains (conservative starting values for Phase W tuning)
+# Final values TBD post MIL per SPECS.md Section 7
+# Vehicle: Ixx=8.54, Iyy=57.0, Izz=50.0 kg m^2, eta_yaw=0.30
+ATC_ANG_PIT_P 4.5
+ATC_ANG_RLL_P 4.5
+ATC_ANG_YAW_P 4.5
+
+# Pitch gains (higher Iyy = 57.0 kg m^2 needs more authority)
+ATC_RAT_PIT_P 0.03
+ATC_RAT_PIT_I 0.10
+ATC_RAT_PIT_D 0.002
+ATC_RAT_PIT_FF 0.20
+ATC_RAT_PIT_IMAX 0.4
+
+# Roll gains (very low Ixx = 8.54 kg m^2, reduced P to prevent overshoot)
+ATC_RAT_RLL_P 0.04
+ATC_RAT_RLL_I 0.08
+ATC_RAT_RLL_D 0.0001
+ATC_RAT_RLL_FF 0.15
+ATC_RAT_RLL_IMAX 0.4
+
+# Yaw gains (reduced authority eta_yaw = 0.30, higher P to compensate)
+ATC_RAT_YAW_P 0.20
+ATC_RAT_YAW_I 0.03
+ATC_RAT_YAW_D 0.002
+ATC_RAT_YAW_FF 0.0
+ATC_RAT_YAW_IMAX 1.0
+
+# Acceleration limits
+ATC_ACC_P_MAX 600
+ATC_ACC_R_MAX 600
+ATC_ACC_Y_MAX 600
+
+# Input time constant
+ATC_INPUT_TC 0.20
+
+# Hover roll trim
+ATC_HOVR_ROL_TRM 0
+
+# Pilot rate time constant
+PILOT_Y_RATE_TC 0.08
+PILOT_Y_RATE 120
+
+# Battery monitoring
+BATT_MONITOR 4
+
+# Calibration offsets (required for SITL to recognize calibrated)
+INS_ACCOFFS_X 0.001
+INS_ACCOFFS_Y 0.001
+INS_ACCOFFS_Z 0.001
+INS_ACCSCAL_X 1.001
+INS_ACCSCAL_Y 1.001
+INS_ACCSCAL_Z 1.001
+
+# Compass offsets
+COMPASS_OFS_X 2.8749
+COMPASS_OFS_Y -21.8262
+COMPASS_OFS_Z -21.8422
+
+# Flight modes for testing
+FLTMODE1 5
+FLTMODE2 2
+FLTMODE3 0
+FLTMODE4 6
+FLTMODE5 7
+FLTMODE6 9
+
+# RC configuration
+RC1_MAX 2000
+RC1_MIN 1000
+RC1_TRIM 1500
+RC2_MAX 2000
+RC2_MIN 1000
+RC2_TRIM 1500
+RC3_MAX 2000
+RC3_MIN 1000
+RC3_TRIM 1500
+RC4_MAX 2000
+RC4_MIN 1000
+RC4_TRIM 1500
+RC5_MAX 2000
+RC5_MIN 1000
+RC5_TRIM 1500
+RC6_MAX 2000
+RC6_MIN 1000
+RC6_TRIM 1500
+RC7_MAX 2000
+RC7_MIN 1000
+RC7_TRIM 1500
+RC8_MAX 2000
+RC8_MIN 1000
+RC8_TRIM 1500
+
+# Servo configuration
+SERVO8_MIN 1000
+SERVO8_MAX 2000
+
+# RPM sensor type
+RPM1_TYPE 10
+
+# Failsafe configuration (SPECS.md Section 11)
+FS_THR_ENABLE 1
+FS_THR_VALUE 975
+FS_GCS_ENABLE 1
+FS_EKF_ACTION 1
+BATT_FS_LOW_ACT 2
+BATT_FS_CRT_ACT 3
+BATT_LOW_VOLT 126.0
+BATT_CRT_VOLT 118.8
+
+# Geofence (SPECS.md Section 13)
+FENCE_ENABLE 1
+FENCE_ACTION 1
+FENCE_ALT_MAX 50
+FENCE_RADIUS 100
+
+# Logging
+LOG_BITMASK 176126
+
+# SITL specific parameters
+ARMING_CHECK 0
+SIM_SPEEDUP 1
+EK3_ENABLE 1
+AHRS_EKF_TYPE 3
+FS_GCS_ENABLE 0
+FS_GCS_TIMEOUT 5
+SIM_BATT_VOLTAGE 150
+RC8_OPTION 32
+IM_STAB_COL_1 0
+IM_STAB_COL_2 40
+IM_STAB_COL_3 100
+IM_STAB_COL_4 100
+
+# Lua scripting
+SCR_ENABLE 1
+SCR_HEAP_SIZE 400000

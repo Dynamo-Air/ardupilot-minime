@@ -8,10 +8,14 @@ H_FLYBAR_MODE,0
 H_SW_TYPE,0
 H_DUAL_MODE,1
 
-# Blade Pitch Limits
+# Blade Pitch Limits (stick input range)
 H_COL_MIN,-2.0
 H_COL_MAX,12.0
 H_CYC_MAX,7.0
+
+# Blade Pitch Angles (actual blade pitch in degrees, required for arming)
+H_COL_ANG_MIN,-2.0
+H_COL_ANG_MAX,12.0
 
 # Governor Configuration
 # H_RSC_MODE = 2 uses DTI HV550 internal governor; H_RSC_SETPOINT is throttle percentage (0 to 100)

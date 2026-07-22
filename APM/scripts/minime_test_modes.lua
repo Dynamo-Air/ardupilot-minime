@@ -95,6 +95,7 @@ local common = require("minime_common")
 
 local SCRIPT_NAME = "TestModes"
 local UPDATE_RATE_MS = 10
+local PUBLISH_DIVIDER = 10              -- 100 Hz / 10 = 10 Hz publishing rate
 
 local last_lockout_alert_ms = 0
 local last_state_change_ms = 0
@@ -117,6 +118,7 @@ local delta_abort_start_ms = 0
 local delta_settle_start_ms = 0
 local delta_last_rpm_log_ms = 0
 local delta_last_imu_log_ms = 0
+local publish_counter = 0
 
 mm_test_lockout_active = true
 mm_test_lockout_reason = ""
@@ -1301,8 +1303,15 @@ end
 
 --[[
    Publish test mode state via MAVLink NAMED_VALUE
+   Rate limited to 10 Hz (100 Hz loop / PUBLISH_DIVIDER)
 ]]--
 local function publish_state()
+    publish_counter = publish_counter + 1
+    if publish_counter < PUBLISH_DIVIDER then
+        return
+    end
+    publish_counter = 0
+
     gcs:send_named_float("SYNC_ST", test_mode_state)
 
     if test_mode_state == common.DELTA_RPM then
