@@ -14,8 +14,10 @@ H_COL_MAX,12.0
 H_CYC_MAX,7.0
 
 # Governor Configuration
+# H_RSC_MODE = 2 uses DTI HV550 internal governor; H_RSC_SETPOINT is throttle percentage (0 to 100)
+# Actual RPM target (1074.2) must be configured on DTI HV550 via DTI CAN Tool (requires DTI-COM adapter)
 H_RSC_MODE,2
-H_RSC_SETPOINT,1074.2
+H_RSC_SETPOINT,70
 
 # Autorotation Parameters
 H_RSC_AROT_ENBL,1
@@ -35,7 +37,7 @@ ATC_RAT_YAW_MAX,15
 # CAN Bus Configuration
 CAN_P1_DRIVER,1
 CAN_D1_PROTOCOL,10
-CAN_D1_BITRATE,500000
+CAN_P1_BITRATE,500000
 
 # GPIO Configuration for HV Control
 # AUX1 (GPIO 50): Forward main contactor

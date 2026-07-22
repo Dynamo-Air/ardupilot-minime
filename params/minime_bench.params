@@ -36,7 +36,7 @@ ATC_RAT_YAW_MAX,15
 # CAN Bus Configuration
 CAN_P1_DRIVER,1
 CAN_D1_PROTOCOL,10
-CAN_D1_BITRATE,500000
+CAN_P1_BITRATE,500000
 
 # GPIO Configuration for HV Control
 SERVO9_FUNCTION,-1
@@ -61,9 +61,10 @@ ARMING_CHECK,0
 # Governor Configuration: Throttle curve mode for test modes
 # Baseline uses H_RSC_MODE = 2 (ESC governor)
 # Test modes (OBJ-MOD-4, OBJ-MOD-5) require H_RSC_MODE = 3 (throttle curve)
-# Test modes require throttle curve mode
+# H_RSC_SETPOINT is throttle percentage (0 to 100), not RPM
+# Actual RPM target (1074.2) must be configured on DTI HV550 via DTI CAN Tool (requires DTI-COM adapter)
 H_RSC_MODE,3
-H_RSC_SETPOINT,1074.2
+H_RSC_SETPOINT,70
 
 # Failsafe Configuration: Disabled for controlled bench environment
 # WARNING: Re-enable all failsafes for flight
@@ -99,4 +100,4 @@ SCR_DEBUG_LVL,2
 
 # Lua Scripting: Enable with adequate heap for all scripts
 SCR_ENABLE,1
-SCR_HEAP_SIZE,65536
+SCR_HEAP_SIZE,204800
