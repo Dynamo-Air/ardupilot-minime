@@ -87,6 +87,11 @@
      mm_test_avoid_violation_band  integer  Index of band causing worst violation (0 if none)
      mm_test_avoid_active          boolean  True if enforcement active and bands loaded
 
+   Drift Correction Outputs (mm_test_ prefix):
+     mm_test_drift_active          boolean  True if drift correction is actively adjusting commanded RPM
+     mm_test_drift_correction_fwd  number   Current drift correction applied to forward rotor (RPM)
+     mm_test_drift_correction_aft  number   Current drift correction applied to aft rotor (RPM)
+
    RPM Avoidance Band Commands:
      mm_test_cmd_reload_bands      Set true to reload bands from config file
 ]]--
@@ -169,10 +174,21 @@ mm_test_avoid_active = false
 -- RPM avoidance band command input
 mm_test_cmd_reload_bands = false
 
+-- Drift correction outputs
+mm_test_drift_active = false
+mm_test_drift_correction_fwd = 0
+mm_test_drift_correction_aft = 0
+
 -- Local avoidance band storage
 local avoidance_bands = {}
 local avoid_last_log_ms = 0
 local avoid_last_warning_ms = 0
+
+-- Local drift correction state
+local drift_last_log_ms = 0
+local drift_last_alert_ms = 0
+local drift_correction_fwd = 0
+local drift_correction_aft = 0
 
 --[[
    Check H_RSC_MODE parameter
@@ -524,6 +540,232 @@ local function get_nearest_safe_rpm(rpm, band)
     else
         return band.max_rpm
     end
+end
+
+--[[
+   Calculate drift correction for a single rotor when actual RPM is inside a band
+   Implements gradual "gentle push" toward nearest band edge per TASKS.md requirement
+   @param actual_rpm Actual rotor RPM from DTI telemetry
+   @param cmd_rpm Current commanded RPM
+   @param dt_s Time step in seconds (typically 0.01 for 100 Hz)
+   @return correction_rpm Amount to add to commanded RPM (positive = increase, negative = decrease)
+   @return band_idx Index of violating band (0 if none)
+   @return target_rpm Target safe RPM at band edge
+]]--
+local function calculate_drift_correction(actual_rpm, cmd_rpm, dt_s)
+    if mm_test_avoid_bands_loaded == 0 then
+        return 0, 0, cmd_rpm
+    end
+
+    for i, band in ipairs(avoidance_bands) do
+        if band.band_type == common.AVOID_TYPE_ABSOLUTE then
+            local level = check_absolute_band_violation(actual_rpm, band)
+
+            if level == common.AVOID_HARD then
+                local target_rpm = get_nearest_safe_rpm(actual_rpm, band)
+                local error_rpm = target_rpm - actual_rpm
+
+                local correction_rate = common.DRIFT_CORRECTION_K_P * math.abs(error_rpm)
+                local max_rate = common.DRIFT_CORRECTION_RATE_RPM_S
+                if correction_rate > max_rate then
+                    correction_rate = max_rate
+                end
+
+                local correction_rpm = correction_rate * dt_s
+
+                if error_rpm < 0 then
+                    correction_rpm = -correction_rpm
+                end
+
+                local min_threshold = common.DRIFT_CORRECTION_MIN_RPM * dt_s
+                if math.abs(correction_rpm) < min_threshold then
+                    correction_rpm = 0
+                elseif math.abs(correction_rpm) > common.DRIFT_CORRECTION_MAX_RPM then
+                    if error_rpm < 0 then
+                        correction_rpm = -common.DRIFT_CORRECTION_MAX_RPM
+                    else
+                        correction_rpm = common.DRIFT_CORRECTION_MAX_RPM
+                    end
+                end
+
+                return correction_rpm, i, target_rpm
+            end
+        end
+    end
+
+    return 0, 0, cmd_rpm
+end
+
+--[[
+   Check if delta RPM (differential) has drifted into a delta band
+   @param actual_fwd Actual forward rotor RPM
+   @param actual_aft Actual aft rotor RPM
+   @param dt_s Time step in seconds
+   @return corr_fwd Correction for forward rotor
+   @return corr_aft Correction for aft rotor
+   @return band_idx Violating band index (0 if none)
+]]--
+local function check_delta_drift(actual_fwd, actual_aft, dt_s)
+    if mm_test_avoid_bands_loaded == 0 then
+        return 0, 0, 0
+    end
+
+    local actual_delta = math.abs(actual_fwd - actual_aft)
+
+    for i, band in ipairs(avoidance_bands) do
+        if band.band_type == common.AVOID_TYPE_DELTA then
+            local level = check_delta_band_violation(actual_delta, band)
+
+            if level == common.AVOID_HARD then
+                local target_delta = get_nearest_safe_rpm(actual_delta, band)
+                local error_delta = target_delta - actual_delta
+
+                local correction_rate = common.DRIFT_CORRECTION_K_P * math.abs(error_delta)
+                local max_rate = common.DRIFT_CORRECTION_RATE_RPM_S
+                if correction_rate > max_rate then
+                    correction_rate = max_rate
+                end
+
+                local correction_rpm = correction_rate * dt_s / 2.0
+
+                local min_threshold = common.DRIFT_CORRECTION_MIN_RPM * dt_s / 2.0
+                if math.abs(correction_rpm) < min_threshold then
+                    return 0, 0, 0
+                end
+
+                local corr_fwd, corr_aft
+                if actual_fwd > actual_aft then
+                    if error_delta < 0 then
+                        corr_fwd = -correction_rpm
+                        corr_aft = correction_rpm
+                    else
+                        corr_fwd = correction_rpm
+                        corr_aft = -correction_rpm
+                    end
+                else
+                    if error_delta < 0 then
+                        corr_fwd = correction_rpm
+                        corr_aft = -correction_rpm
+                    else
+                        corr_fwd = -correction_rpm
+                        corr_aft = correction_rpm
+                    end
+                end
+
+                return corr_fwd, corr_aft, i
+            end
+        end
+    end
+
+    return 0, 0, 0
+end
+
+--[[
+   Log drift correction event to onboard SD card
+   @param band_idx Index of band causing correction
+   @param rotor "FWD" or "AFT" or "DELTA"
+   @param actual_rpm Actual rotor RPM
+   @param cmd_rpm Commanded RPM before correction
+   @param correction Applied correction amount
+   @param target_rpm Target safe RPM at band edge
+]]--
+local function log_drift_correction(band_idx, rotor, actual_rpm, cmd_rpm, correction, target_rpm)
+    local now = millis():toint()
+    if now - drift_last_log_ms < common.DRIFT_CORRECTION_LOG_RATE_MS then
+        return
+    end
+    drift_last_log_ms = now
+
+    local rotor_code = 0
+    if rotor == "AFT" then
+        rotor_code = 1
+    elseif rotor == "DELTA" then
+        rotor_code = 2
+    end
+
+    logger:write("DRFT", "Idx,Rot,ActR,CmdR,Corr,TgtR", "BBffff",
+        band_idx, rotor_code, actual_rpm, cmd_rpm, correction, target_rpm)
+end
+
+--[[
+   Send GCS alert for drift correction (rate limited)
+   @param band_idx Index of violating band
+   @param rotor "FWD", "AFT", or "DELTA"
+]]--
+local function alert_drift_correction(band_idx, rotor)
+    local now = millis():toint()
+    if now - drift_last_alert_ms < common.DRIFT_CORRECTION_ALERT_RATE_MS then
+        return
+    end
+    drift_last_alert_ms = now
+
+    gcs:send_text(common.MAV_SEVERITY.WARNING,
+        string.format("%s: Drift correction active, band %d (%s)",
+            SCRIPT_NAME, band_idx, rotor))
+end
+
+--[[
+   Apply drift corrections to commanded RPM values
+   Called after enforce_avoidance_bands() in the update loop
+   @param cmd_rpm_fwd Commanded forward RPM (after band enforcement)
+   @param cmd_rpm_aft Commanded aft RPM (after band enforcement)
+   @return corrected_fwd Corrected forward RPM
+   @return corrected_aft Corrected aft RPM
+   @return drift_active True if any drift correction is active
+]]--
+local function apply_drift_corrections(cmd_rpm_fwd, cmd_rpm_aft)
+    if mm_test_avoid_bands_loaded == 0 then
+        return cmd_rpm_fwd, cmd_rpm_aft, false
+    end
+
+    local actual_fwd, actual_aft = get_actual_rpm()
+    if actual_fwd == nil or actual_aft == nil then
+        return cmd_rpm_fwd, cmd_rpm_aft, false
+    end
+
+    local dt_s = UPDATE_RATE_MS / 1000.0
+    local drift_active = false
+    local corrected_fwd = cmd_rpm_fwd
+    local corrected_aft = cmd_rpm_aft
+
+    local corr_fwd, band_fwd, target_fwd = calculate_drift_correction(actual_fwd, cmd_rpm_fwd, dt_s)
+    if corr_fwd ~= 0 then
+        corrected_fwd = cmd_rpm_fwd + corr_fwd
+        drift_active = true
+        drift_correction_fwd = corr_fwd
+        log_drift_correction(band_fwd, "FWD", actual_fwd, cmd_rpm_fwd, corr_fwd, target_fwd)
+        alert_drift_correction(band_fwd, "FWD")
+    else
+        drift_correction_fwd = 0
+    end
+
+    local corr_aft, band_aft, target_aft = calculate_drift_correction(actual_aft, cmd_rpm_aft, dt_s)
+    if corr_aft ~= 0 then
+        corrected_aft = cmd_rpm_aft + corr_aft
+        drift_active = true
+        drift_correction_aft = corr_aft
+        log_drift_correction(band_aft, "AFT", actual_aft, cmd_rpm_aft, corr_aft, target_aft)
+        alert_drift_correction(band_aft, "AFT")
+    else
+        drift_correction_aft = 0
+    end
+
+    if mm_test_delta_active then
+        local delta_corr_fwd, delta_corr_aft, delta_band = check_delta_drift(actual_fwd, actual_aft, dt_s)
+        if delta_band > 0 then
+            corrected_fwd = corrected_fwd + delta_corr_fwd
+            corrected_aft = corrected_aft + delta_corr_aft
+            drift_active = true
+            local actual_delta = math.abs(actual_fwd - actual_aft)
+            log_drift_correction(delta_band, "DELTA", actual_delta,
+                math.abs(cmd_rpm_fwd - cmd_rpm_aft),
+                delta_corr_fwd + delta_corr_aft,
+                avoidance_bands[delta_band].min_rpm)
+            alert_drift_correction(delta_band, "DELTA")
+        end
+    end
+
+    return corrected_fwd, corrected_aft, drift_active
 end
 
 --[[
@@ -994,8 +1236,12 @@ local function handle_delta_rpm()
         handle_band_violation(violation_level, violation_band, avoidance_bands[violation_band].description)
     end
 
-    mm_test_cmd_rpm_fwd = safe_fwd
-    mm_test_cmd_rpm_aft = safe_aft
+    local drift_fwd, drift_aft, drift_active = apply_drift_corrections(safe_fwd, safe_aft)
+    mm_test_cmd_rpm_fwd = drift_fwd
+    mm_test_cmd_rpm_aft = drift_aft
+    mm_test_drift_active = drift_active
+    mm_test_drift_correction_fwd = drift_correction_fwd
+    mm_test_drift_correction_aft = drift_correction_aft
 
     local fwd_rpm, aft_rpm = get_actual_rpm()
     if fwd_rpm ~= nil then
@@ -1005,7 +1251,7 @@ local function handle_delta_rpm()
         mm_test_rpm_aft = aft_rpm
     end
 
-    local beat_freq = common.calculate_beat_freq(fwd_rpm or safe_fwd, aft_rpm or safe_aft)
+    local beat_freq = common.calculate_beat_freq(fwd_rpm or drift_fwd, aft_rpm or drift_aft)
     mm_test_beat_freq_hz = beat_freq
 
     local elapsed_s = (now - delta_step_start_ms) / 1000.0
@@ -1148,8 +1394,12 @@ local function handle_sync_phase_0()
         handle_band_violation(violation_level, violation_band, avoidance_bands[violation_band].description)
     end
 
-    mm_test_cmd_rpm_fwd = safe_fwd
-    mm_test_cmd_rpm_aft = safe_aft
+    local drift_fwd, drift_aft, drift_active = apply_drift_corrections(safe_fwd, safe_aft)
+    mm_test_cmd_rpm_fwd = drift_fwd
+    mm_test_cmd_rpm_aft = drift_aft
+    mm_test_drift_active = drift_active
+    mm_test_drift_correction_fwd = drift_correction_fwd
+    mm_test_drift_correction_aft = drift_correction_aft
 
     local fwd_rpm, aft_rpm = get_actual_rpm()
     if fwd_rpm ~= nil then
@@ -1207,8 +1457,12 @@ local function handle_sync_phase_60()
         handle_band_violation(violation_level, violation_band, avoidance_bands[violation_band].description)
     end
 
-    mm_test_cmd_rpm_fwd = safe_fwd
-    mm_test_cmd_rpm_aft = safe_aft
+    local drift_fwd, drift_aft, drift_active = apply_drift_corrections(safe_fwd, safe_aft)
+    mm_test_cmd_rpm_fwd = drift_fwd
+    mm_test_cmd_rpm_aft = drift_aft
+    mm_test_drift_active = drift_active
+    mm_test_drift_correction_fwd = drift_correction_fwd
+    mm_test_drift_correction_aft = drift_correction_aft
 
     local fwd_rpm, aft_rpm = get_actual_rpm()
     if fwd_rpm ~= nil then

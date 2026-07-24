@@ -215,6 +215,15 @@ M.AVOID_HARD = 3                      -- RPM inside band (requires action)
 M.AVOID_TYPE_ABSOLUTE = 1             -- Band defines rotor RPM range to avoid
 M.AVOID_TYPE_DELTA = 2                -- Band defines differential RPM range to avoid
 
+-- Drift correction constants
+-- When actual RPM drifts into an avoidance band, these control the gradual correction
+M.DRIFT_CORRECTION_RATE_RPM_S = 20.0  -- Maximum correction rate (RPM per second)
+M.DRIFT_CORRECTION_K_P = 0.5          -- Proportional gain (correction rate per RPM error)
+M.DRIFT_CORRECTION_MIN_RPM = 0.5      -- Minimum correction increment threshold (RPM)
+M.DRIFT_CORRECTION_MAX_RPM = 5.0      -- Maximum single cycle correction (RPM)
+M.DRIFT_CORRECTION_LOG_RATE_MS = 200  -- Rate limit for drift correction logging (ms)
+M.DRIFT_CORRECTION_ALERT_RATE_MS = 5000 -- Rate limit for GCS drift alerts (ms)
+
 -- State name lookup for logging
 M.SYNC_STATE_NAMES = {
     [0] = "SYNC_IDLE",

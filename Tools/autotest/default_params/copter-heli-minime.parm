@@ -4,8 +4,10 @@
 
 # Frame Configuration (tandem dual helicopter)
 # FRAME_CLASS 11 = Heli_Dual (not 6 which is single heli)
+# H_DUAL_MODE 0 = Longitudinal/Tandem (fore and aft rotors, Chinook style)
+# H_DUAL_MODE 1 = Transverse/Lateral (side by side rotors)
 FRAME_CLASS 11
-H_DUAL_MODE 1
+H_DUAL_MODE 0
 
 # Blade Pitch Limits (SPECS.md Section 2)
 H_COL_MIN 1300

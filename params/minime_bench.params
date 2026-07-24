@@ -8,17 +8,21 @@
 # =============================================================================
 
 # Frame Configuration
-FRAME_CLASS,6
+FRAME_CLASS,11
 H_FLYBAR_MODE,0
 H_SW_TYPE,0
-H_DUAL_MODE,1
+H_DUAL_MODE,0
 
-# Blade Pitch Limits (stick input range)
-H_COL_MIN,-2.0
-H_COL_MAX,12.0
+# Collective Servo PWM Limits (forward rotor)
+# These are PWM values for servo endpoints, not blade pitch angles
+H_COL_MIN,1250
+H_COL_MAX,1750
+
+# Maximum Cyclic Blade Pitch (degrees)
 H_CYC_MAX,7.0
 
-# Blade Pitch Angles (actual blade pitch in degrees, required for arming)
+# Blade Pitch Angles (degrees corresponding to H_COL_MIN and H_COL_MAX PWM values)
+# Required for arming and proper collective scaling
 H_COL_ANG_MIN,-2.0
 H_COL_ANG_MAX,12.0
 
@@ -58,16 +62,33 @@ BATT_CRT_VOLT,118.8
 # BENCH TEST OVERRIDES
 # =============================================================================
 
-# Compass: Disabled to avoid magnetic interference errors on bench
-# "PreArm: Check mag field" and "EKF3 Yaw inconsistent" errors are normal indoors
-# WARNING: Re-enable for flight (COMPASS_ENABLE,1 and EK3_SRC1_YAW,1)
+# GPS: Disabled for indoor bench testing
+# GPS does not work indoors due to signal multipathing from walls/windows
+# WARNING: Re-enable for flight (GPS1_TYPE,1)
+GPS1_TYPE,0
+
+# Compass and EKF Sources: Disabled for indoor bench testing without GPS
+# Default EK3 sources use GPS for position/velocity which causes PreArm failures indoors
+# EK3_SRC1_YAW=8 is GSF (Gaussian Sum Filter) which estimates yaw from IMU without compass/GPS
+# WARNING: Re-enable for flight:
+#   COMPASS_ENABLE,1
+#   EK3_SRC1_POSXY,3
+#   EK3_SRC1_VELXY,3
+#   EK3_SRC1_VELZ,3
+#   EK3_SRC1_YAW,1
 COMPASS_ENABLE,0
+EK3_SRC1_POSXY,0
+EK3_SRC1_VELXY,0
+EK3_SRC1_VELZ,0
 EK3_SRC1_YAW,8
 
-# Arming Checks: Skip RC and safety switch for bench testing without transmitter
-# ARMING_SKIPCHK is a bitmask: bit 6 (64) = RC Channels
+# Arming Checks: Skip RC and INS for bench testing without transmitter or calibration
+# ARMING_SKIPCHK is a bitmask:
+#   bit 4 (16) = INS (accelerometer/gyro calibration)
+#   bit 6 (64) = RC Channels
+#   80 = 16 + 64 (skip both INS and RC)
 # WARNING: Set ARMING_SKIPCHK,0 for flight
-ARMING_SKIPCHK,64
+ARMING_SKIPCHK,80
 
 # Safety Switch: Disabled (Cube Orange+ has no built-in safety switch)
 # WARNING: Set BRD_SAFETY_DEFLT,1 if external safety switch connected for flight

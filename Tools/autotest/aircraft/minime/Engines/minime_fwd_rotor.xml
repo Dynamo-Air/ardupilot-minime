@@ -1,0 +1,42 @@
+<?xml version="1.0"?>
+<!--
+  AS-10 MiniMe Forward Rotor
+
+  Rotor Parameters (from SPECS.md):
+    Diameter: 2.0 m (6.56 ft)
+    Number of blades: 3
+    Nominal RPM: 1074.2
+    Blade chord: ~0.1 m (0.33 ft)
+    Lock number (gamma): 4.30
+    Flap frequency ratio (nu_beta): 5.50 per rev
+    Per rotor polar inertia: 0.5025 kg m^2 (0.37 slug ft^2)
+
+  Rotation: Counter-clockwise when viewed from above (sense = 1)
+-->
+
+<rotor name="minime_fwd_rotor">
+
+  <diameter unit="FT">          6.56 </diameter>
+  <numblades>                      3 </numblades>
+  <gearratio>                    4.0 </gearratio>
+  <nominalrpm>                1074.2 </nominalrpm>
+  <minrpm>                       1.0 </minrpm>
+  <maxrpm>                    1200.0 </maxrpm>
+
+  <chord unit="FT">             0.33 </chord>
+  <liftcurveslope>              5.73 </liftcurveslope>
+  <twist unit="RAD">          -0.10 </twist>
+
+  <flappingmoment unit="SLUG*FT2">  0.12 </flappingmoment>
+  <massmoment unit="SLUG*FT">       0.08 </massmoment>
+  <polarmoment unit="SLUG*FT2">     0.37 </polarmoment>
+
+  <tiplossfactor>               0.97 </tiplossfactor>
+  <inflowlag>                   0.10 </inflowlag>
+
+  <hingeoffset unit="FT">       0.49 </hingeoffset>
+
+  <groundeffectexp>             0.20 </groundeffectexp>
+  <groundeffectshift unit="FT">  8.0 </groundeffectshift>
+
+</rotor>

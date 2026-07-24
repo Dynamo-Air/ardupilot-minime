@@ -1,0 +1,271 @@
+<?xml version="1.0"?>
+<?xml-stylesheet type="text/xsl" href="http://jsbsim.sourceforge.net/JSBSim.xsl"?>
+<fdm_config name="minime" release="ALPHA" version="2.0"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:noNamespaceSchemaLocation="http://jsbsim.sourceforge.net/JSBSim.xsd">
+
+  <fileheader>
+    <author>Dynamo Air</author>
+    <filecreationdate>2026-07-23</filecreationdate>
+    <version>1.0</version>
+    <description>
+      AS-10 MiniMe Tandem Counter-Rotating Helicopter
+
+      Vehicle Specifications (from SPECS.md):
+        Mass: 97.5 kg (214.94 lbm)
+        Ixx: 8.54 kg m^2 (very low, responsive roll)
+        Iyy: 180.76 kg m^2 (high pitch inertia)
+        Izz: 180.76 kg m^2 (high yaw inertia)
+        Hub to hub span: 2.5 m (8.2 ft)
+        Hover RPM: 1074.2
+        Rotor diameter: 2.0 m (6.56 ft)
+        Blades per rotor: 3
+        Frame type: Tandem counter-rotating, hingeless flybarless
+
+      Control:
+        Forward rotor swashplate: Servos 1-3
+        Aft rotor swashplate: Servos 4-6
+        Yaw via differential cyclic (not differential collective)
+        eta_yaw = 0.30 (structural constraint)
+    </description>
+
+    <reference refID="SPECS" author="Dynamo Air"
+               title="AS-10 MiniMe ArduPilot Technical Specifications"
+               date="2026"/>
+  </fileheader>
+
+  <metrics>
+    <wingarea unit="FT2">        0.01 </wingarea>
+    <wingspan unit="FT">         8.20 </wingspan>
+    <chord unit="FT">            0.33 </chord>
+    <htailarea unit="FT2">       0.01 </htailarea>
+    <htailarm unit="FT">         4.10 </htailarm>
+    <vtailarea unit="FT2">       0.01 </vtailarea>
+    <vtailarm unit="FT">         4.10 </vtailarm>
+
+    <location name="AERORP" unit="IN">
+      <x>   0.0 </x>
+      <y>   0.0 </y>
+      <z>   0.0 </z>
+    </location>
+    <location name="EYEPOINT" unit="IN">
+      <x>  30.0 </x>
+      <y>   0.0 </y>
+      <z>  10.0 </z>
+    </location>
+    <location name="VRP" unit="IN">
+      <x>   0.0 </x>
+      <y>   0.0 </y>
+      <z>   0.0 </z>
+    </location>
+  </metrics>
+
+  <mass_balance>
+    <ixx unit="SLUG*FT2">     6.30 </ixx>
+    <iyy unit="SLUG*FT2">   133.35 </iyy>
+    <izz unit="SLUG*FT2">   133.35 </izz>
+    <ixz unit="SLUG*FT2">     0.0 </ixz>
+    <emptywt unit="LBS">   214.94 </emptywt>
+    <location name="CG" unit="IN">
+      <x>   0.0 </x>
+      <y>   0.0 </y>
+      <z>   0.0 </z>
+    </location>
+  </mass_balance>
+
+  <ground_reactions>
+    <contact type="BOGEY" name="skid_front_left">
+      <location unit="IN">
+        <x>  30.0 </x>
+        <y> -12.0 </y>
+        <z> -18.0 </z>
+      </location>
+      <static_friction>    0.80 </static_friction>
+      <dynamic_friction>   0.60 </dynamic_friction>
+      <rolling_friction>   0.60 </rolling_friction>
+      <spring_coeff unit="LBS/FT">       2000.0 </spring_coeff>
+      <damping_coeff unit="LBS/FT/SEC">   400.0 </damping_coeff>
+      <max_steer> 0 </max_steer>
+      <brake_group> NONE </brake_group>
+    </contact>
+    <contact type="BOGEY" name="skid_front_right">
+      <location unit="IN">
+        <x>  30.0 </x>
+        <y>  12.0 </y>
+        <z> -18.0 </z>
+      </location>
+      <static_friction>    0.80 </static_friction>
+      <dynamic_friction>   0.60 </dynamic_friction>
+      <rolling_friction>   0.60 </rolling_friction>
+      <spring_coeff unit="LBS/FT">       2000.0 </spring_coeff>
+      <damping_coeff unit="LBS/FT/SEC">   400.0 </damping_coeff>
+      <max_steer> 0 </max_steer>
+      <brake_group> NONE </brake_group>
+    </contact>
+    <contact type="BOGEY" name="skid_rear_left">
+      <location unit="IN">
+        <x> -30.0 </x>
+        <y> -12.0 </y>
+        <z> -18.0 </z>
+      </location>
+      <static_friction>    0.80 </static_friction>
+      <dynamic_friction>   0.60 </dynamic_friction>
+      <rolling_friction>   0.60 </rolling_friction>
+      <spring_coeff unit="LBS/FT">       2000.0 </spring_coeff>
+      <damping_coeff unit="LBS/FT/SEC">   400.0 </damping_coeff>
+      <max_steer> 0 </max_steer>
+      <brake_group> NONE </brake_group>
+    </contact>
+    <contact type="BOGEY" name="skid_rear_right">
+      <location unit="IN">
+        <x> -30.0 </x>
+        <y>  12.0 </y>
+        <z> -18.0 </z>
+      </location>
+      <static_friction>    0.80 </static_friction>
+      <dynamic_friction>   0.60 </dynamic_friction>
+      <rolling_friction>   0.60 </rolling_friction>
+      <spring_coeff unit="LBS/FT">       2000.0 </spring_coeff>
+      <damping_coeff unit="LBS/FT/SEC">   400.0 </damping_coeff>
+      <max_steer> 0 </max_steer>
+      <brake_group> NONE </brake_group>
+    </contact>
+  </ground_reactions>
+
+  <propulsion>
+    <engine file="minime_electric">
+      <feed>0</feed>
+      <thruster file="minime_fwd_rotor">
+        <location unit="IN">
+          <x>  49.21 </x>
+          <y>   0.0 </y>
+          <z>  24.0 </z>
+        </location>
+        <orient unit="DEG">
+          <roll>   0.0 </roll>
+          <pitch> 90.0 </pitch>
+          <yaw>    0.0 </yaw>
+        </orient>
+        <sense> 1 </sense>
+      </thruster>
+    </engine>
+
+    <engine file="minime_electric">
+      <feed>0</feed>
+      <thruster file="minime_aft_rotor">
+        <location unit="IN">
+          <x> -49.21 </x>
+          <y>   0.0 </y>
+          <z>  24.0 </z>
+        </location>
+        <orient unit="DEG">
+          <roll>   0.0 </roll>
+          <pitch> 90.0 </pitch>
+          <yaw>    0.0 </yaw>
+        </orient>
+        <sense> -1 </sense>
+      </thruster>
+    </engine>
+
+    <tank number="0" type="FUEL">
+      <location unit="IN">
+        <x>   0.0 </x>
+        <y>   0.0 </y>
+        <z>   0.0 </z>
+      </location>
+      <capacity unit="LBS">  0.1 </capacity>
+      <contents unit="LBS">  0.0 </contents>
+    </tank>
+  </propulsion>
+
+  <system file="minime_rotor_control"/>
+
+  <flight_control name="minime fcs">
+
+    <channel name="rotor speed control">
+      <fcs_function name="fcs/throttle-cmd-fwd">
+        <function>
+          <property> fcs/throttle-cmd-norm </property>
+        </function>
+        <output> propulsion/engine[0]/throttle-cmd-norm </output>
+      </fcs_function>
+
+      <fcs_function name="fcs/throttle-cmd-aft">
+        <function>
+          <property> fcs/throttle-cmd-norm </property>
+        </function>
+        <output> propulsion/engine[1]/throttle-cmd-norm </output>
+      </fcs_function>
+    </channel>
+
+  </flight_control>
+
+  <aerodynamics>
+    <property value="3.28">  metrics/rotor/R-ft     </property>
+    <property value="33.85"> metrics/rotor/Area-ft2 </property>
+    <property value="0.09">  metrics/rotor/solidity </property>
+
+    <property value="3.05">  aero/ref/area-ft2   </property>
+    <property value="369.5"> aero/ref/vtip-fps   </property>
+
+    <function name="aero/coefficient/CD0_fus">
+      <description>Fuselage drag coefficient</description>
+      <value> 0.15 </value>
+    </function>
+
+    <axis name="DRAG">
+      <function name="aero/force/D0_fus">
+        <description>Fuselage parasitic drag</description>
+        <product>
+          <property> aero/qbar-psf </property>
+          <property> aero/ref/area-ft2 </property>
+          <property> aero/coefficient/CD0_fus </property>
+        </product>
+      </function>
+    </axis>
+
+    <axis name="SIDE">
+      <function name="aero/force/Y_fus">
+        <description>Fuselage side force</description>
+        <product>
+          <property> aero/qbar-psf </property>
+          <property> aero/ref/area-ft2 </property>
+          <value> -0.5 </value>
+          <sin> <property> aero/beta-rad </property> </sin>
+        </product>
+      </function>
+    </axis>
+
+    <axis name="PITCH">
+      <function name="aero/moment/Mq_damp">
+        <description>Pitch rate damping</description>
+        <product>
+          <value> -50.0 </value>
+          <property> velocities/q-aero-rad_sec </property>
+        </product>
+      </function>
+    </axis>
+
+    <axis name="ROLL">
+      <function name="aero/moment/Lp_damp">
+        <description>Roll rate damping</description>
+        <product>
+          <value> -5.0 </value>
+          <property> velocities/p-aero-rad_sec </property>
+        </product>
+      </function>
+    </axis>
+
+    <axis name="YAW">
+      <function name="aero/moment/Nr_damp">
+        <description>Yaw rate damping</description>
+        <product>
+          <value> -50.0 </value>
+          <property> velocities/r-aero-rad_sec </property>
+        </product>
+      </function>
+    </axis>
+
+  </aerodynamics>
+
+</fdm_config>

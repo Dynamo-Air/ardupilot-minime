@@ -1,0 +1,211 @@
+<?xml version="1.0"?>
+<!--
+  AS-10 MiniMe Tandem Helicopter Rotor Control System
+
+  Control Mapping (from SPECS.md):
+    Servos 1-3: Forward rotor swashplate (collective + cyclic)
+    Servos 4-6: Aft rotor swashplate (collective + cyclic)
+    Servo 8: Motor interlock / RSC
+
+  Tandem Control Philosophy:
+    Roll: Both rotors tilt in same direction (symmetric cyclic)
+    Pitch: Differential collective between forward and aft rotors
+    Yaw: Differential lateral cyclic (not differential collective)
+         eta_yaw = 0.30 structural constraint limits yaw authority
+
+  Blade Pitch Limits:
+    Collective: -2 to +12 degrees
+    Cyclic max: 7 degrees at hover (shares budget with collective)
+-->
+
+<system name="minime rotor control">
+
+  <property value="0.0"> fcs/collective-cmd-norm </property>
+  <property value="0.0"> fcs/collective-trim-cmd-norm </property>
+
+  <property value="0.22"> fcs/adj/collective-gain </property>
+  <property value="0.09"> fcs/adj/collective-bias </property>
+
+  <property value="0.12"> fcs/adj/longitudinal-gain </property>
+  <property value="0.00"> fcs/adj/longitudinal-bias </property>
+
+  <property value="0.12"> fcs/adj/lateral-gain </property>
+  <property value="0.00"> fcs/adj/lateral-bias </property>
+
+  <property value="0.30"> fcs/adj/yaw-authority </property>
+
+  <channel name="collective control">
+
+    <summer name="fcs/collective-cmd-trim-sum">
+      <input> fcs/collective-cmd-norm </input>
+      <input> fcs/collective-trim-cmd-norm </input>
+      <clipto>
+        <min> 0.0 </min>
+        <max> 1.0 </max>
+      </clipto>
+    </summer>
+
+    <pure_gain name="fcs/collective-gain">
+      <input>  fcs/collective-cmd-trim-sum </input>
+      <gain>   fcs/adj/collective-gain </gain>
+    </pure_gain>
+
+    <summer name="fcs/collective-ctrl-rad">
+      <input> fcs/collective-gain </input>
+      <input> fcs/adj/collective-bias </input>
+      <output> fcs/collective-ctrl-rad </output>
+    </summer>
+
+    <lag_filter name="fcs/collective-ctrl-rad-lag">
+      <input> fcs/collective-ctrl-rad </input>
+      <c1>   15.0 </c1>
+      <clipto>
+        <min> -0.035 </min>
+        <max>  0.21 </max>
+      </clipto>
+    </lag_filter>
+
+  </channel>
+
+  <channel name="pitch control (differential collective)">
+
+    <pure_gain name="fcs/longitudinal-gain">
+      <input>  fcs/elevator-cmd-norm </input>
+      <gain>   fcs/adj/longitudinal-gain </gain>
+    </pure_gain>
+
+    <summer name="fcs/pitch-ctrl-rad">
+      <input> fcs/longitudinal-gain </input>
+      <input> fcs/adj/longitudinal-bias </input>
+      <clipto>
+        <min> -0.12 </min>
+        <max>  0.12 </max>
+      </clipto>
+    </summer>
+
+    <lag_filter name="fcs/pitch-ctrl-rad-lag">
+      <input> fcs/pitch-ctrl-rad </input>
+      <c1>   20.0 </c1>
+    </lag_filter>
+
+  </channel>
+
+  <channel name="roll control (symmetric cyclic)">
+
+    <pure_gain name="fcs/lateral-gain">
+      <input>  fcs/aileron-cmd-norm </input>
+      <gain>   fcs/adj/lateral-gain </gain>
+    </pure_gain>
+
+    <summer name="fcs/roll-ctrl-rad">
+      <input> fcs/lateral-gain </input>
+      <input> fcs/adj/lateral-bias </input>
+      <clipto>
+        <min> -0.12 </min>
+        <max>  0.12 </max>
+      </clipto>
+    </summer>
+
+    <lag_filter name="fcs/roll-ctrl-rad-lag">
+      <input> fcs/roll-ctrl-rad </input>
+      <c1>   20.0 </c1>
+    </lag_filter>
+
+  </channel>
+
+  <channel name="yaw control (differential cyclic)">
+
+    <fcs_function name="fcs/yaw-ctrl-rad">
+      <description>
+        Yaw via differential lateral cyclic with eta_yaw = 0.30 authority limit.
+        Forward rotor tilts one direction, aft rotor tilts opposite.
+      </description>
+      <function>
+        <product>
+          <property> fcs/rudder-cmd-norm </property>
+          <property> fcs/adj/lateral-gain </property>
+          <property> fcs/adj/yaw-authority </property>
+        </product>
+      </function>
+      <clipto>
+        <min> -0.036 </min>
+        <max>  0.036 </max>
+      </clipto>
+    </fcs_function>
+
+    <lag_filter name="fcs/yaw-ctrl-rad-lag">
+      <input> fcs/yaw-ctrl-rad </input>
+      <c1>   20.0 </c1>
+    </lag_filter>
+
+  </channel>
+
+  <channel name="forward rotor commands">
+
+    <fcs_function name="fcs/fwd-collective-ctrl-rad">
+      <description>Forward rotor collective (with pitch differential)</description>
+      <function>
+        <sum>
+          <property> fcs/collective-ctrl-rad-lag </property>
+          <property> fcs/pitch-ctrl-rad-lag </property>
+        </sum>
+      </function>
+      <output> propulsion/engine[0]/collective-ctrl-rad </output>
+    </fcs_function>
+
+    <fcs_function name="fcs/fwd-lateral-ctrl-rad">
+      <description>Forward rotor lateral cyclic (roll + yaw)</description>
+      <function>
+        <sum>
+          <property> fcs/roll-ctrl-rad-lag </property>
+          <property> fcs/yaw-ctrl-rad-lag </property>
+        </sum>
+      </function>
+      <output> propulsion/engine[0]/lateral-ctrl-rad </output>
+    </fcs_function>
+
+    <fcs_function name="fcs/fwd-longitudinal-ctrl-rad">
+      <description>Forward rotor longitudinal cyclic</description>
+      <function>
+        <value> 0.0 </value>
+      </function>
+      <output> propulsion/engine[0]/longitudinal-ctrl-rad </output>
+    </fcs_function>
+
+  </channel>
+
+  <channel name="aft rotor commands">
+
+    <fcs_function name="fcs/aft-collective-ctrl-rad">
+      <description>Aft rotor collective (with pitch differential, opposite sign)</description>
+      <function>
+        <difference>
+          <property> fcs/collective-ctrl-rad-lag </property>
+          <property> fcs/pitch-ctrl-rad-lag </property>
+        </difference>
+      </function>
+      <output> propulsion/engine[1]/collective-ctrl-rad </output>
+    </fcs_function>
+
+    <fcs_function name="fcs/aft-lateral-ctrl-rad">
+      <description>Aft rotor lateral cyclic (roll - yaw for counter-rotation)</description>
+      <function>
+        <difference>
+          <property> fcs/roll-ctrl-rad-lag </property>
+          <property> fcs/yaw-ctrl-rad-lag </property>
+        </difference>
+      </function>
+      <output> propulsion/engine[1]/lateral-ctrl-rad </output>
+    </fcs_function>
+
+    <fcs_function name="fcs/aft-longitudinal-ctrl-rad">
+      <description>Aft rotor longitudinal cyclic</description>
+      <function>
+        <value> 0.0 </value>
+      </function>
+      <output> propulsion/engine[1]/longitudinal-ctrl-rad </output>
+    </fcs_function>
+
+  </channel>
+
+</system>

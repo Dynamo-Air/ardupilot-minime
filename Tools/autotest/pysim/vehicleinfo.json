@@ -305,6 +305,16 @@
                     "default_params/copter-X.parm",
                     "models/freestyle.parm"
                 ]
+            },
+            "JSON": {
+                "waf_target": "bin/arducopter-heli",
+                "default_params_filename": "default_params/copter-heli.parm",
+                "external": true
+            },
+            "JSON-minime": {
+                "waf_target": "bin/arducopter-heli",
+                "default_params_filename": "default_params/copter-heli-minime.parm",
+                "external": true
             }
         }
     },
@@ -348,6 +358,16 @@
                 "default_params_filename": [
                     "default_params/copter-heli.parm"
                 ]
+            },
+            "JSON": {
+                "waf_target": "bin/arducopter-heli",
+                "default_params_filename": "default_params/copter-heli.parm",
+                "external": true
+            },
+            "JSON-minime": {
+                "waf_target": "bin/arducopter-heli",
+                "default_params_filename": "default_params/copter-heli-minime.parm",
+                "external": true
             }
         }
     },

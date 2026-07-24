@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<!--
+  AS-10 MiniMe Electric Motor (Dummy Engine)
+
+  This is a placeholder electric engine to drive the rotor thrusters.
+  The DTI HV550 motor controllers handle actual power management.
+  Motor RPM = Rotor RPM * 4 (gearbox ratio)
+  Peak motor RPM: 4296.7 at hover
+-->
+
+<electric_engine name="minime_electric">
+  <power unit="HP"> 50.0 </power>
+</electric_engine>

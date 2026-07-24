@@ -20,17 +20,21 @@
 # =============================================================================
 
 # Frame Configuration
-FRAME_CLASS,6
+FRAME_CLASS,11
 H_FLYBAR_MODE,0
 H_SW_TYPE,0
-H_DUAL_MODE,1
+H_DUAL_MODE,0
 
-# Blade Pitch Limits (stick input range)
-H_COL_MIN,-2.0
-H_COL_MAX,12.0
+# Collective Servo PWM Limits (forward rotor)
+# These are PWM values for servo endpoints, not blade pitch angles
+H_COL_MIN,1250
+H_COL_MAX,1750
+
+# Maximum Cyclic Blade Pitch (degrees)
 H_CYC_MAX,7.0
 
-# Blade Pitch Angles (actual blade pitch in degrees, required for arming)
+# Blade Pitch Angles (degrees corresponding to H_COL_MIN and H_COL_MAX PWM values)
+# Required for arming and proper collective scaling
 H_COL_ANG_MIN,-2.0
 H_COL_ANG_MAX,12.0
 
